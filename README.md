@@ -2,11 +2,13 @@
 
 Private, rootless SMB browsing experiment for Termux.
 
+**Project target:** make a NAS folder behave like a filesystem for ordinary CLI programs launched inside `nas shell`, without rooting Android. The current Bash-command preview does **not** meet this target yet. Development is moving to a PRoot-style syscall bridge; see [virtual filesystem design](docs/virtual-filesystem.md).
+
 ## Current status
 
 `nas shell` now launches an interactive **Bash** session and loads your `~/.bashrc`. Your Termux home, installed commands, and Android storage paths stay available. One configured folder under your home (default `~/nas`) is routed to an SMB share for `cd`, `ls` (including `-a`, `-l`, and `-h`), `cat`, and single-file `cp` commands. The folder name is configurable per connection.
 
-This is a shell-level bridge, **not a filesystem mount**. Programs that directly open a NAS path, such as `nano`, `find`, or `command ls`, currently see only a temporary local shadow directory. The shell bridge handles only the commands listed above. See [architecture](docs/architecture.md) for the longer-term syscall bridge investigation. No Android NAS connection has been tested yet.
+This is a shell-level preview, **not a filesystem mount**. Programs that directly open a NAS path, such as `nano`, `find`, or `command ls`, currently see only a temporary local shadow directory. The shell bridge handles only the commands listed above. No Android NAS connection has been tested yet.
 
 ## Install privately on your phone
 

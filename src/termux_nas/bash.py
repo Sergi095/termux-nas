@@ -68,5 +68,5 @@ cp() {
     command cp "$@"
 }
 
-printf 'NAS available at %s. Local Termux files remain available.\n' "$TERMUX_NAS_MOUNT"
+printf 'NAS preview at %s: cd, ls, cat and single-file cp use SMB. Other programs see a local placeholder.\n' "$TERMUX_NAS_MOUNT"
 '''

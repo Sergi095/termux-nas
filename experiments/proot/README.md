@@ -17,7 +17,7 @@ The host needs a C compiler, `make`, and `libtalloc-dev`.
 
 ## Android emulator check
 
-On 2026-11-17, the patch built and the demo passed in the official Termux v0.118.3 x86_64 APK on a separate Android SDK 37 AOSP ATD emulator. PRoot and all test commands ran as Termux's normal app UID (`u0_a106`); the emulator was not rooted for the test. The test also read a regular local Termux file after `cd` into the virtual NAS folder, so both trees were visible to the same Bash process.
+On 2026-11-17, the patch built and the demo passed in the official Termux v0.118.3 x86_64 APK on a separate Android SDK 37 AOSP ATD emulator. The demo was first run through `adb run-as`, then launched from Termux's own terminal. The terminal run reported UID `u0_a106` and SELinux context `u:r:untrusted_app_27:s0:c106,c256,c512,c768`; it exited with status 0. The emulator was not rooted for the test. The test also read a regular local Termux file after `cd` into the virtual NAS folder, so both trees were visible to the same Bash process.
 
 In that Termux installation, the build used `pkg install clang make libtalloc python` and `make -C src` on a source tree prepared with the patch above. The fixture demo ran with `python experiments/proot/run_host_demo.py src/proot`. It used Termux's `find`, `ls`, `cat`, and `bash` executables. The phone's aarch64 build is not yet verified.
 

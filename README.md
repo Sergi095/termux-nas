@@ -6,7 +6,7 @@ The folder is a simulated filesystem view provided by PRoot. It exists only for 
 
 ## Install in Termux
 
-Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://github.com/termux-play-store). Open Termux and run these commands, regardless of which source you used:
+Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://play.google.com/store/apps/details?id=com.termux). Open Termux and run these commands, regardless of which source you used:
 
 ```sh
 pkg install -y git
@@ -38,6 +38,16 @@ If an older Termux bootstrap reports a broken `curl` while installing packages, 
 After installing, follow [Add a NAS connection](#add-a-nas-connection). The full command reference is in [docs/cli.md](docs/cli.md).
 
 To check the CLI and patched PRoot locally without a NAS, run `bash ~/repos/termux-nas/tests/termux_smoke.sh`. A real NAS connection is still needed to check SMB login and your account's share permissions.
+
+### Verified builds
+
+| Termux source | Environment | Checked |
+| --- | --- | --- |
+| Google Play `googleplay.2026.10.09` | Android 17, aarch64 phone | Installer, PRoot loader, live SMB share listing, and `cd ~/nas` confirmed by a user. |
+| F-Droid `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, local fixture reads and writes. |
+| GitHub `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, local fixture reads and writes. |
+
+These checks cover the named versions and architectures. The live Google Play test confirmed browsing; write operations have been checked against a local SMB2 server and emulator fixtures.
 
 ## Add a NAS connection
 
@@ -107,7 +117,7 @@ Changes become visible on the NAS after the command finishes and the Bash prompt
 
 This is limited write-through emulation. A command may finish locally before an SMB error is reported at the prompt. Symbolic links, hard links, ownership and permission changes, and renaming across different shares are unsupported. The local folder does not mirror SMB access control checks before each write; the server applies your account's permissions when the change syncs. Changed remote files are checked before overwriting, but concurrent renames and deletes are not fully protected.
 
-Directory listings are reused for two seconds to reduce SMB requests. Opened files are cached until you exit, so a file changed on the NAS by another device may need a new `nas mount` session before you see the change. PRoot adds overhead to filesystem operations, so this shell is slower than ordinary Termux. The writable bridge has been tested against a local SMB2 server on Linux; a live NAS connection on the Android 17 aarch64 phone still needs verification.
+Directory listings are reused for two seconds to reduce SMB requests. Opened files are cached until you exit, so a file changed on the NAS by another device may need a new `nas mount` session before you see the change. PRoot adds overhead to filesystem operations, so this shell is slower than ordinary Termux.
 
 ## Remove the package
 

@@ -17,6 +17,6 @@ python /path/to/termux-nas/experiments/proot/run_host_demo.py src/proot
 
 The host needs a C compiler, `make`, and `libtalloc-dev`. The fixture demo checks reads and the metadata write guard. The writable SMB integration test can run with `TERMUX_NAS_TEST_PROOT=/tmp/nasfs-proot/src/proot python -m unittest discover -s tests -v` from the project root.
 
-The original read-only patch passed a fixture test on an unrooted Android 17 aarch64 phone with Google Play Termux `googleplay.2026.10.09`. That Termux build needs its executable PRoot loader at `$PREFIX/../applib/libproot-loader.so`; the package detects it automatically. The current writable patch has been tested against a local SMB2 server on Linux and still needs a live phone test.
+Google Play Termux `googleplay.2026.10.09` needs its executable PRoot loader at `$PREFIX/../applib/libproot-loader.so`; the package detects it automatically. A user confirmed a live NAS listing from the patched PRoot shell on Android 17 aarch64. The writable patch has also passed local SMB2 tests on Linux and fixture tests in F-Droid and GitHub Termux emulators.
 
 `upgrade-readonly.patch` is kept only for the earlier experiment. Use `bash install.sh` for the current patch.

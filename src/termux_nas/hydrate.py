@@ -37,6 +37,7 @@ class Hydrator:
         self.missing_until: dict[str, float] = {}
         self.created: set[Path] = set()
         self.remote: dict[str, RemoteEntry] = {}
+        self.touched: set[str] = set()
         self.dirty = False
         self.lock = threading.RLock()
 
@@ -128,7 +129,8 @@ class Hydrator:
                 if entry.directory:
                     continue
                 previous = self.remote.get(path)
-                if previous and previous.inode == entry.inode and previous.signature == entry.signature:
+                if (path not in self.touched and previous and
+                        previous.inode == entry.inode and previous.signature == entry.signature):
                     continue
                 if previous and previous.version is not None and self.backend.version(path) != previous.version:
                     raise OSError(f"NAS file changed outside this session: {path}")
@@ -155,6 +157,7 @@ class Hydrator:
 
             self.listed_until.clear()
             self.missing_until.clear()
+            self.touched.clear()
             self.dirty = False
             if self.marker is not None:
                 self.marker.unlink(missing_ok=True)
@@ -170,6 +173,8 @@ class Hydrator:
             now = time.monotonic()
             if action in ("W", "P", "R"):
                 self.dirty = True
+            if action == "W" and relative:
+                self.touched.add(relative)
             if relative and absolute.exists():
                 self.missing_until.pop(relative, None)
             if relative in self.remote and not absolute.exists() and action not in ("W", "P", "R"):

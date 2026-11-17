@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,9 +105,11 @@ class HydratorTests(unittest.TestCase):
             hydrator = Hydrator(mount, backend)
             hydrator.ensure(str(mount), "M")
             hydrator.ensure(str(mount / "hello.txt"), "O")
+            original = (mount / "hello.txt").stat()
             backend.remote_version = (7, 2)
             hydrator.ensure(str(mount / "hello.txt"), "W")
             (mount / "hello.txt").write_text("changes", encoding="utf-8")
+            os.utime(mount / "hello.txt", ns=(original.st_atime_ns, original.st_mtime_ns))
             with self.assertRaisesRegex(OSError, "changed outside"):
                 hydrator.sync()
             self.assertEqual(backend.uploads, [])

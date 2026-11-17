@@ -45,5 +45,9 @@ if [[ ! -x "$installed_proot" || "$current_id" != "$build_id" ]]; then
     rm -rf "$build_dir"
 fi
 
-python -m pip install "$repo_dir"
+crypto_version="$(python -c 'from importlib.metadata import version; print(version("cryptography"))')"
+constraints_file="$(mktemp "$PREFIX/tmp/termux-nas-constraints.XXXXXXXX")"
+trap 'rm -f "$constraints_file"' EXIT
+printf 'cryptography==%s\n' "$crypto_version" > "$constraints_file"
+python -m pip install --constraint "$constraints_file" "$repo_dir"
 printf '\nInstalled. Add a NAS with `nas add` if needed, then run `nas mount NAME`.\n'

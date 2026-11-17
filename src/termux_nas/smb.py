@@ -1,9 +1,25 @@
 """Small adapter around smbprotocol's high-level smbclient API."""
 
 import errno
+import importlib
 import shutil
 import stat as stat_module
+import sys
+from importlib.metadata import distribution
 from typing import BinaryIO
+
+
+def _smbclient_module():
+    """Load smbprotocol's package ahead of Impacket's bin/smbclient.py script."""
+    package_root = str(distribution("smbprotocol").locate_file(""))
+    sys.path.insert(0, package_root)
+    try:
+        client = importlib.import_module("smbclient")
+    finally:
+        sys.path.pop(0)
+    if not hasattr(client, "register_session"):
+        raise ImportError(f"Expected smbprotocol's smbclient package, got {client.__file__}")
+    return client
 
 
 def _rpc_connection(host: str, user: str, password: str, port: int):
@@ -19,10 +35,9 @@ def _rpc_connection(host: str, user: str, password: str, port: int):
 
 class SMBBackend:
     def __init__(self, host: str, share: str, user: str, password: str, port: int = 445):
-        import smbclient
         from smbprotocol.header import NtStatus
 
-        self._client = smbclient
+        self._client = _smbclient_module()
         self._root = "\\\\" + host + "\\" + share
         self._host = host
         self._share = share
@@ -34,7 +49,7 @@ class SMBBackend:
             NtStatus.STATUS_OBJECT_NAME_NOT_FOUND,
             NtStatus.STATUS_OBJECT_PATH_NOT_FOUND,
         }
-        smbclient.register_session(host, username=user, password=password, port=port)
+        self._client.register_session(host, username=user, password=password, port=port)
 
     def _unc(self, path: str) -> str:
         return self._root + ("\\" + path.replace("/", "\\") if path else "")

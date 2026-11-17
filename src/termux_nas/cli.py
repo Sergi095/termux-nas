@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             return run_mounted_shell(backend, str(item.get("mount_name", "nas")), args.proot,
                                      mount_path=str(mount_path) if mount_path is not None else None)
         return 0
-    except (OSError, ValueError, KeyError) as error:
+    except (OSError, ValueError, KeyError, ImportError) as error:
         print(f"nas: {error}", file=sys.stderr)
         return 1
 

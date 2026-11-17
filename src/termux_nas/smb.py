@@ -21,6 +21,18 @@ class SMBBackend:
     def listdir(self, path: str) -> list[str]:
         return sorted(self._client.listdir(self._unc(path)), key=str.casefold)
 
+    def entries(self, path: str) -> list[dict]:
+        result = []
+        for entry in self._client.scandir(self._unc(path)):
+            details = entry.stat()
+            result.append({
+                "name": entry.name,
+                "mode": stat_module.filemode(details.st_mode),
+                "size": details.st_size,
+                "mtime": details.st_mtime,
+            })
+        return sorted(result, key=lambda item: item["name"].casefold())
+
     def read(self, path: str) -> BinaryIO:
         return self._client.open_file(self._unc(path), mode="rb")
 

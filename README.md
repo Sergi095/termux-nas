@@ -4,44 +4,67 @@ Private, rootless SMB browsing experiment for Termux.
 
 ## Current status
 
-The current CLI opens a **virtual NAS shell**. Within `nas shell`, `cd ~/nas`, `ls`, `pwd`, `cat`, `get`, and `put` operate on an SMB share. This is not an Android mount: `~/nas` is not a NAS-backed path in the ordinary Termux shell, and arbitrary tools such as `find` and `nano` do not yet operate on it. The longer-term goal is to investigate a rootless per-process filesystem bridge for that behavior; see [architecture](docs/architecture.md).
+`nas shell` now launches an interactive **Bash** session and loads your `~/.bashrc`. Your Termux home, installed commands, and Android storage paths stay available. One configured folder under your home (default `~/nas`) is routed to an SMB share for `cd`, `ls` (including `-a`, `-l`, and `-h`), `cat`, and single-file `cp` commands. The folder name is configurable per connection.
 
-No NAS connection has been tested on an Android device yet. The initial automated tests cover path handling and shell navigation with a fake backend.
+This is a shell-level bridge, **not a filesystem mount**. Programs that directly open a NAS path, such as `nano`, `find`, or `command ls`, currently see only a temporary local shadow directory. The shell bridge handles only the commands listed above. See [architecture](docs/architecture.md) for the longer-term syscall bridge investigation. No Android NAS connection has been tested yet.
 
 ## Install privately on your phone
 
-Copy or clone this repository into **Termux home**. Then run in Termux:
+Clone or copy this private repository into Termux home, then run:
 
 ```sh
-pkg install python python-cryptography
-cd ~/termux-nas
+pkg install python python-cryptography bash
+cd ~/repos/termux-nas
 python -m pip install .
 nas --help
 ```
 
-You do not need to publish the repository or a package. To update a local installation after changing the source, run `python -m pip install .` again. If installation fails while building the `cryptography` dependency, ensure `python-cryptography` is installed from the Termux package repository first.
+To update an existing install after pulling changes:
+
+```sh
+cd ~/repos/termux-nas
+git pull
+python -m pip install .
+```
+
+You do not need to publish a package or APK. If `pip` fails while building `cryptography`, install `python-cryptography` from Termux first.
 
 ## Connect
 
 ```sh
-nas add home --host 192.168.1.10 --share Shared --user your_username
+nas add home --host 192.168.1.10 --share Shared --user your_username --mount-name media
+nas list
 nas shell home
 ```
 
-The password is requested when the shell starts. Connection details are stored in `~/.config/termux-nas/connections.json`; passwords are not stored.
+Existing connections created before `--mount-name` was added default to `~/nas`. Change one without re-entering the server details:
 
-Inside `nas shell`:
-
-```text
-~/nas $ ls
-~/nas $ cd Photos
-~/nas/Photos $ cat notes.txt
-~/nas/Photos $ get picture.jpg
-~/nas/Photos $ put ~/local-file.txt
-~/nas/Photos $ exit
+```sh
+nas set-mount home media
 ```
 
-`get` downloads to the current **local** Termux directory by default. `put` uploads from a local Termux path. Both refuse to overwrite an existing destination. Quote paths containing spaces.
+The SMB password is requested when `nas shell` starts. It stays in that process's memory and is not written to the connection file.
+
+Inside `nas shell`, local paths and commands work through Bash, while the configured NAS folder uses SMB for supported operations:
+
+```sh
+cd ~/storage/shared
+ls
+cd ~/Documents
+cat local.txt
+cd ~/media
+ls
+ls -lah
+cd Photos
+cat notes.txt
+cp picture.jpg ~/storage/downloads/picture.jpg
+cp ~/Documents/new.txt ~/media/Photos/new.txt
+exit
+```
+
+Run `termux-setup-storage` once if `~/storage` is not present. Single-file `cp` refuses to overwrite a destination. A failed network transfer can leave a partial destination file; remove it before retrying.
+
+The NAS folder is a temporary symlink into a private shadow directory. It is removed when `nas shell` exits. If a file or directory already has that name in your Termux home, choose another name with `nas set-mount` rather than deleting it.
 
 ## Development
 
@@ -49,4 +72,4 @@ Inside `nas shell`:
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-The SMB adapter uses the [smbprotocol high-level `smbclient` API](https://github.com/jborean93/smbprotocol). The CLI is kept separate from that adapter so navigation can be tested without a NAS.
+The SMB adapter uses the [smbprotocol high-level `smbclient` API](https://github.com/jborean93/smbprotocol). The Bash session talks to a private Unix socket served by the parent `nas` process. Passwords are not passed as command-line arguments or stored in that socket's files.

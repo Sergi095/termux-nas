@@ -2,14 +2,16 @@
 
 ## User goal
 
-On an unrooted Android phone, enter `~/nas` and use normal terminal navigation to browse an SMB share. File explorers implement their own network clients; they do not expose SMB shares as filesystem paths to Termux. Termux's `~/storage` entries are links to Android-provided local paths.
+On an unrooted Android phone, run `nas shell` and keep the full local Termux environment while accessing an SMB share at a configurable path under `~`. Local files and `~/storage/shared` should remain accessible from the same shell.
 
-## Implemented first slice
+## Current implementation
 
-`nas add` saves non-secret connection details. `nas shell` requests the password, establishes one SMB session, and holds a virtual current directory. Commands in this shell translate `~/nas/...` to SMB share-relative paths. No kernel mount or Android APK is involved.
+`nas shell` requests the SMB password and connects using `smbprotocol`. It starts interactive Bash with the user's `~/.bashrc` and a few additional shell functions. A temporary symlink at the configured path points to a private shadow directory so Bash can physically enter it. The shell functions route `cd`, `ls`, `cat`, and simple `cp` operations on that path to an SMB backend through a private Unix socket. Local paths go to Bash and ordinary Termux commands. The symlink and socket are removed at exit.
 
-## Next investigation: arbitrary CLI programs
+The shadow directory does not contain the full NAS. It only holds directory placeholders needed for Bash to change directories. Direct filesystem access by unrelated programs is not provided by the current bridge.
 
-For `cd ~/nas` and arbitrary programs to work in a launched shell, a rootless bridge would need to intercept filesystem operations such as `chdir`, `getcwd`, `stat`, `openat`, `getdents64`, `read`, `write`, and `rename`, then translate them to SMB operations. A PRoot-style traced process is a possible research direction. It would only affect processes started under that bridge, may be slower, and may not support every program. A shell-only wrapper cannot provide full POSIX filesystem behavior.
+## Longer-term investigation: arbitrary CLI programs
 
-The bridge should be prototyped only after confirming what Android versions and CPU architectures the device uses. Success criteria: `cd ~/nas`, `ls`, `cat`, and `find` work under the launcher without root, and file writes are safe when the network drops.
+For unmodified programs to see NAS file contents, a rootless bridge would have to intercept filesystem calls such as `chdir`, `getcwd`, `stat`, `openat`, `getdents64`, `read`, `write`, and `rename`, then translate them to SMB operations. A PRoot-style traced process is a possible research direction. PRoot currently maps paths to local files; it does not implement an SMB backend. This approach would only affect processes launched under the bridge, may be slower, and may not support every program.
+
+Success criteria for a later bridge: `cd`, `ls`, `cat`, `find`, and a text editor work on the NAS path without command-specific Bash functions; local Termux and Android storage paths remain available; file writes handle network interruption safely.

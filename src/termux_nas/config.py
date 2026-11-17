@@ -37,7 +37,7 @@ def save(connections: dict[str, dict[str, object]]) -> None:
             os.unlink(temp)
 
 
-def validate(name: str, host: str, share: str, user: str, port: int) -> None:
+def validate(name: str, host: str, share: str, user: str, port: int, mount_name: str = "nas") -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
         raise ValueError("Connection name must use letters, digits, dots, dashes or underscores")
     if not host or any(char in host for char in "/\\\x00"):
@@ -48,3 +48,9 @@ def validate(name: str, host: str, share: str, user: str, port: int) -> None:
         raise ValueError("SMB username is required")
     if not 1 <= port <= 65535:
         raise ValueError("Port must be between 1 and 65535")
+    validate_mount_name(mount_name)
+
+
+def validate_mount_name(mount_name: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", mount_name) or mount_name in (".", ".."):
+        raise ValueError("Mount name must be a single directory name")

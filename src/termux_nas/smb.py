@@ -18,6 +18,9 @@ class SMBBackend:
     def is_dir(self, path: str) -> bool:
         return stat_module.S_ISDIR(self._client.stat(self._unc(path)).st_mode)
 
+    def stat_size(self, path: str) -> int:
+        return self._client.stat(self._unc(path)).st_size
+
     def listdir(self, path: str) -> list[str]:
         return sorted(self._client.listdir(self._unc(path)), key=str.casefold)
 

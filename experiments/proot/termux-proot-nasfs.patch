@@ -1,0 +1,129 @@
+diff --git a/src/GNUmakefile b/src/GNUmakefile
+index 5ade279..899c4ea 100644
+--- a/src/GNUmakefile
++++ b/src/GNUmakefile
+@@ -82,6 +82,7 @@ OBJECTS += \
+ 	extension/fake_id0/fake_id0.o \
+ 	extension/hidden_files/hidden_files.o \
+ 	extension/mountinfo/mountinfo.o \
++	extension/nasfs/nasfs.o \
+ 	extension/port_switch/port_switch.o \
+ 	extension/sysvipc/sysvipc.o \
+ 	extension/sysvipc/sysvipc_msg.o \
+diff --git a/src/cli/cli.c b/src/cli/cli.c
+index ffd069a..8e93883 100644
+--- a/src/cli/cli.c
++++ b/src/cli/cli.c
+@@ -480,6 +480,8 @@ int main(int argc, char *const argv[])
+ 
+ 	if (NULL == getenv("PROOT_NO_MOUNTINFO"))
+ 		initialize_extension(tracee, mountinfo_callback, NULL);
++	if (getenv("PROOT_NAS_MOUNT") != NULL && getenv("PROOT_NAS_SOCKET") != NULL)
++		initialize_extension(tracee, nasfs_callback, NULL);
+ 
+ 	/* Start the first tracee.  */
+ 	pid = getpid();
+diff --git a/src/extension/extension.h b/src/extension/extension.h
+index 7df1fa0..5188d5d 100644
+--- a/src/extension/extension.h
++++ b/src/extension/extension.h
+@@ -235,5 +235,6 @@ extern int fix_symlink_size_callback(Extension *extension, ExtensionEvent event,
+ extern int ashmem_memfd_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
+ #endif /* defined(__ANDROID__) || defined(__BIONIC__) */
+ extern int mountinfo_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
++extern int nasfs_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
+ 
+ #endif /* EXTENSION_H */
+diff --git a/src/extension/nasfs/nasfs.c b/src/extension/nasfs/nasfs.c
+new file mode 100644
+index 0000000..1fd9a3b
+--- /dev/null
++++ b/src/extension/nasfs/nasfs.c
+@@ -0,0 +1,87 @@
++/* Read-only NAS filesystem hydration experiment for PRoot. */
++#include <arpa/inet.h>
++#include <errno.h>
++#include <limits.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++#include "extension/extension.h"
++#include "syscall/sysnum.h"
++
++static int full_write(int fd, const void *buffer, size_t size)
++{
++    const char *data = buffer;
++    while (size > 0) {
++        ssize_t count = write(fd, data, size);
++        if (count <= 0) return -1;
++        data += count;
++        size -= count;
++    }
++    return 0;
++}
++
++static int hydrate(const char *path, char action)
++{
++    const char *socket_path = getenv("PROOT_NAS_SOCKET");
++    struct sockaddr_un address;
++    uint32_t length;
++    char reply;
++    int fd;
++
++    if (socket_path == NULL || strlen(socket_path) >= sizeof(address.sun_path))
++        return -EIO;
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) return -EIO;
++    memset(&address, 0, sizeof(address));
++    address.sun_family = AF_UNIX;
++    strcpy(address.sun_path, socket_path);
++    if (connect(fd, (struct sockaddr *) &address, sizeof(address)) < 0) {
++        close(fd);
++        return -EIO;
++    }
++    length = htonl((uint32_t) strlen(path));
++    if (full_write(fd, &action, 1) < 0 ||
++        full_write(fd, &length, sizeof(length)) < 0 ||
++        full_write(fd, path, strlen(path)) < 0 ||
++        read(fd, &reply, 1) != 1) {
++        close(fd);
++        return -EIO;
++    }
++    close(fd);
++    if (reply == '0') return 0;
++    if (reply == '1') return -ENOENT;
++    return -EIO;
++}
++
++int nasfs_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2)
++{
++    const char *mount;
++    const char *base;
++    const char *user;
++    char path[PATH_MAX];
++    Sysnum sysnum;
++    char action;
++    int length;
++    if (event == INHERIT_PARENT) return 0;
++    if (event != GUEST_PATH) return 0;
++
++    mount = getenv("PROOT_NAS_MOUNT");
++    if (mount == NULL) return 0;
++    base = (const char *) d1;
++    user = (const char *) d2;
++    if (user[0] == '/') length = snprintf(path, sizeof(path), "%s", user);
++    else length = snprintf(path, sizeof(path), "%s/%s", base, user);
++    if (length < 0 || (size_t) length >= sizeof(path)) return -ENAMETOOLONG;
++    if (strncmp(path, mount, strlen(mount)) != 0 ||
++        (path[strlen(mount)] != '/' && path[strlen(mount)] != '\0'))
++        return 0;
++    sysnum = get_sysnum(TRACEE(extension), ORIGINAL);
++    action = (sysnum == PR_open || sysnum == PR_openat ||
++              sysnum == PR_openat2 || sysnum == PR_creat) ? 'O' : 'M';
++    return hydrate(path, action);
++}

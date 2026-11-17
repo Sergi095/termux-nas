@@ -18,13 +18,14 @@ def parser() -> argparse.ArgumentParser:
     add.add_argument("--port", type=int, default=445)
     add.add_argument("--mount-name", default="nas", help="Folder name under your Termux home (default: nas)")
     sub.add_parser("list", help="List saved NAS connections")
-    set_mount = sub.add_parser("set-mount", help="Change the folder name for a saved connection")
+    set_mount = sub.add_parser("set-mount", help="Set a folder name or path for a saved connection")
     set_mount.add_argument("name")
     set_mount.add_argument("folder")
     shell = sub.add_parser("shell", help="Open Bash with local files and a NAS folder")
     shell.add_argument("name", nargs="?")
     mount = sub.add_parser("mount", help="Open a PRoot shell with a read-only NAS filesystem")
     mount.add_argument("name", nargs="?")
+    mount.add_argument("--at", metavar="FOLDER", help="Use this empty folder as the NAS path for this session")
     mount.add_argument("--proot", help="Path to the patched PRoot binary")
     remove = sub.add_parser("remove", help="Forget a saved NAS connection")
     remove.add_argument("name")
@@ -52,14 +53,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Saved {args.name}. Password will be requested when you connect.")
         elif args.command == "list":
             for name, item in sorted(connections.items()):
-                print(f"{name}: //{item['host']}/{item['share']} ({item['user']}) -> ~/{item.get('mount_name', 'nas')}")
+                target = item.get("mount_path") or f"~/{item.get('mount_name', 'nas')}"
+                print(f"{name}: //{item['host']}/{item['share']} ({item['user']}) -> {target}")
         elif args.command == "set-mount":
             if args.name not in connections:
                 raise ValueError(f"Unknown connection: {args.name}")
-            config.validate_mount_name(args.folder)
-            connections[args.name]["mount_name"] = args.folder
+            if "/" in args.folder or args.folder.startswith("~"):
+                target = config.normalize_mount_path(args.folder)
+                connections[args.name]["mount_path"] = target
+            else:
+                config.validate_mount_name(args.folder)
+                target = f"~/{args.folder}"
+                connections[args.name]["mount_name"] = args.folder
+                connections[args.name].pop("mount_path", None)
             config.save(connections)
-            print(f"{args.name} will appear at ~/{args.folder}")
+            print(f"{args.name} will appear at {target}")
         elif args.command == "remove":
             if args.name not in connections:
                 raise ValueError(f"Unknown connection: {args.name}")
@@ -85,7 +93,9 @@ def main(argv: list[str] | None = None) -> int:
                 return run_shell(backend, str(item.get("mount_name", "nas")))
             from .mounted import run_mounted_shell
 
-            return run_mounted_shell(backend, str(item.get("mount_name", "nas")), args.proot)
+            mount_path = args.at if args.at is not None else item.get("mount_path")
+            return run_mounted_shell(backend, str(item.get("mount_name", "nas")), args.proot,
+                                     mount_path=str(mount_path) if mount_path is not None else None)
         return 0
     except (OSError, ValueError, KeyError) as error:
         print(f"nas: {error}", file=sys.stderr)

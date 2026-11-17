@@ -40,6 +40,21 @@ class MountedShellTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertFalse((home / "nas").exists())
 
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
+    def test_existing_custom_folder_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            mount = home / "other-folder"
+            mount.mkdir()
+            bash = shutil.which("bash")
+            script = 'cd "$HOME/other-folder" && cat hello.txt'
+            with patch.dict(os.environ, {"HOME": str(home)}):
+                status = run_mounted_shell(FakeBackend(), "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                                           [bash, "-c", script], mount_path=str(mount))
+            self.assertEqual(status, 0)
+            self.assertTrue(mount.is_dir())
+            self.assertEqual(list(mount.iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

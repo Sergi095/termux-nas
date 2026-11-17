@@ -46,4 +46,4 @@ if [[ ! -x "$installed_proot" || "$current_id" != "$build_id" ]]; then
 fi
 
 python -m pip install "$repo_dir"
-printf '\nInstalled. Add a NAS with `nas add` if needed, then run `nas-mount NAME`.\n'
+printf '\nInstalled. Add a NAS with `nas add` if needed, then run `nas mount NAME`.\n'

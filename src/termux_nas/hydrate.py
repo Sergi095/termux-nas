@@ -24,7 +24,29 @@ class Hydrator:
         self.kinds: dict[str, bool] = {}
         self.listed_until: dict[str, float] = {}
         self.missing_until: dict[str, float] = {}
+        self.created: set[Path] = set()
         self.lock = threading.Lock()
+
+    def _mkdir(self, directory: Path) -> None:
+        if directory == self.mount or directory.is_dir():
+            return
+        self._mkdir(directory.parent)
+        directory.mkdir()
+        self.created.add(directory)
+
+    def cleanup(self) -> None:
+        """Remove bridge-owned cache entries without deleting other folder contents."""
+        with self.lock:
+            for path in sorted(self.created, key=lambda item: len(item.parts), reverse=True):
+                try:
+                    if path.is_dir() and not path.is_symlink():
+                        path.rmdir()
+                    else:
+                        path.unlink()
+                except (FileNotFoundError, OSError):
+                    # A nonempty directory may now contain files created outside
+                    # the traced shell; leave those files in place.
+                    pass
 
     def ensure(self, raw_path: str, action: str) -> None:
         absolute = Path(os.path.normpath(raw_path))
@@ -48,7 +70,7 @@ class Hydrator:
             if directory:
                 if self.listed_until.get(relative, 0) > now:
                     return
-                absolute.mkdir(parents=True, exist_ok=True)
+                self._mkdir(absolute)
                 for entry in self.backend.entries(relative):
                     name = entry["name"]
                     if name in (".", "..") or any(char in name for char in "/\\\x00"):
@@ -59,14 +81,15 @@ class Hydrator:
                     self.kinds[child_relative] = child_is_dir
                     self.missing_until.pop(child_relative, None)
                     if child_is_dir:
-                        child.mkdir(exist_ok=True)
+                        self._mkdir(child)
                     elif not child.exists():
                         with child.open("xb") as output:
                             output.truncate(entry["size"])
+                        self.created.add(child)
                 self.listed_until[relative] = time.monotonic() + self.metadata_ttl
                 return
 
-            absolute.parent.mkdir(parents=True, exist_ok=True)
+            self._mkdir(absolute.parent)
             if action == "O" and relative not in self.hydrated:
                 descriptor, temporary = tempfile.mkstemp(prefix=".nas-", dir=absolute.parent)
                 try:
@@ -74,12 +97,14 @@ class Hydrator:
                         shutil.copyfileobj(source, output)
                     os.replace(temporary, absolute)
                     self.hydrated.add(relative)
+                    self.created.add(absolute)
                 finally:
                     if os.path.exists(temporary):
                         os.unlink(temporary)
             elif not absolute.exists():
                 with absolute.open("xb") as output:
                     output.truncate(self.backend.stat_size(relative))
+                self.created.add(absolute)
 
 
 class HydrationHandler(socketserver.BaseRequestHandler):

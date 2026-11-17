@@ -55,6 +55,18 @@ class HydratorTests(unittest.TestCase):
             self.assertEqual(backend.dir_checks, 1)
             self.assertEqual(backend.listings, 1)
 
+    def test_cleanup_preserves_unrelated_files_in_existing_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "other-folder"
+            mount.mkdir()
+            hydrator = Hydrator(mount, FakeBackend())
+            hydrator.ensure(str(mount), "M")
+            (mount / "my-file.txt").write_text("keep me", encoding="utf-8")
+            hydrator.cleanup()
+            self.assertEqual((mount / "my-file.txt").read_text(encoding="utf-8"), "keep me")
+            self.assertFalse((mount / "Photos").exists())
+            self.assertFalse((mount / "hello.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

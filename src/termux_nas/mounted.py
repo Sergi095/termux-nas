@@ -39,23 +39,32 @@ def _environment(mount: Path, socket_path: Path) -> dict[str, str]:
 
 
 def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
-                      command: list[str] | None = None) -> int:
-    """Show a NAS tree at ~/mount_name for processes launched by patched PRoot."""
+                      command: list[str] | None = None, mount_path: str | None = None) -> int:
+    """Show a NAS tree at an empty folder for processes launched by patched PRoot."""
     validate_mount_name(mount_name)
     proot = _patched_proot(proot_path)
     bash = shutil.which("bash")
     if bash is None:
         raise ValueError("bash is required for nas-mount")
     home = Path.home()
-    mount = home / mount_name
-    if os.path.lexists(mount):
-        raise ValueError(f"{mount} already exists; choose another mount name")
+    chosen = os.path.expanduser(mount_path) if mount_path else str(home / mount_name)
+    mount = Path(os.path.abspath(chosen))
+    if mount.is_symlink():
+        raise ValueError(f"Mount folder must not be a symlink: {mount}")
+    if mount.exists():
+        if not mount.is_dir() or any(mount.iterdir()):
+            raise ValueError(f"Mount folder must be an empty directory: {mount}")
+        created_mount = False
+    else:
+        mount.mkdir(mode=0o700)
+        created_mount = True
+    original_mode = stat.S_IMODE(mount.stat().st_mode)
 
     with tempfile.TemporaryDirectory(prefix="termux-nas-mount-") as temporary:
         socket_path = Path(temporary) / "nas.sock"
-        mount.mkdir(mode=0o700)
+        hydrator = Hydrator(mount, backend)
         try:
-            with HydrationServer(str(socket_path), Hydrator(mount, backend)) as server:
+            with HydrationServer(str(socket_path), hydrator) as server:
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 try:
@@ -78,7 +87,7 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                         env=environment, cwd=home, stdout=subprocess.DEVNULL,
                         stderr=subprocess.PIPE, text=True,
                     )
-                    if write_check.returncode == 0 or stat.S_IMODE(mount.stat().st_mode) != 0o700:
+                    if write_check.returncode == 0 or stat.S_IMODE(mount.stat().st_mode) != original_mode:
                         raise ValueError("Patched PRoot lacks the read-only guard; rebuild it with the latest patch")
                     if command is None:
                         print(f"NAS is available at {mount} in this shell (read only). Exit to disconnect.")
@@ -91,5 +100,9 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                     thread.join(timeout=2)
         finally:
             if mount.is_dir() and not mount.is_symlink():
-                os.chmod(mount, 0o700)
-                shutil.rmtree(mount)
+                hydrator.cleanup()
+                if created_mount:
+                    try:
+                        mount.rmdir()
+                    except OSError:
+                        pass

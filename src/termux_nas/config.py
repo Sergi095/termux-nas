@@ -54,3 +54,12 @@ def validate(name: str, host: str, share: str, user: str, port: int, mount_name:
 def validate_mount_name(mount_name: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", mount_name) or mount_name in (".", ".."):
         raise ValueError("Mount name must be a single directory name")
+
+
+def normalize_mount_path(folder: str) -> str:
+    if not folder or any(char in folder for char in "\x00\n\r"):
+        raise ValueError("Invalid mount folder path")
+    path = Path(os.path.abspath(os.path.expanduser(folder)))
+    if path == Path("/"):
+        raise ValueError("The filesystem root cannot be a NAS folder")
+    return str(path)

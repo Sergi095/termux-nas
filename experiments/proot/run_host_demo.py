@@ -27,6 +27,13 @@ def main() -> int:
         (root / "local.txt").write_text("local Termux file\n", encoding="utf-8")
         socket_path = root / "nas.sock"
         environment = os.environ.copy()
+        # Google Play Termux cannot execute the loader extracted under its
+        # writable tmp directory. Its APK ships an executable loader instead.
+        prefix = environment.get("PREFIX")
+        if prefix:
+            app_loader = Path(prefix).parent / "applib" / "libproot-loader.so"
+            if app_loader.is_file():
+                environment.setdefault("PROOT_LOADER", str(app_loader.resolve()))
         environment.update({
             "PYTHONPATH": str(package_root),
             "NASFS_MOUNT": str(mount),

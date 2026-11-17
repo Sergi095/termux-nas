@@ -19,7 +19,11 @@ The host needs a C compiler, `make`, and `libtalloc-dev`.
 
 On 2026-11-17, the patch built and the demo passed in the official Termux v0.118.3 x86_64 APK on a separate Android SDK 37 AOSP ATD emulator. The demo was first run through `adb run-as`, then launched from Termux's own terminal. The terminal run reported UID `u0_a106` and SELinux context `u:r:untrusted_app_27:s0:c106,c256,c512,c768`; it exited with status 0. The emulator was not rooted for the test. The test also read a regular local Termux file after `cd` into the virtual NAS folder, so both trees were visible to the same Bash process.
 
-In that Termux installation, the build used `pkg install clang make libtalloc python` and `make -C src` on a source tree prepared with the patch above. The fixture demo ran with `python experiments/proot/run_host_demo.py src/proot`. It used Termux's `find`, `ls`, `cat`, and `bash` executables. The phone's aarch64 build is not yet verified.
+In that Termux installation, the build used `pkg install clang make libtalloc python` and `make -C src` on a source tree prepared with the patch above. The fixture demo ran with `python experiments/proot/run_host_demo.py src/proot`. It used Termux's `find`, `ls`, `cat`, and `bash` executables.
+
+## Android phone check
+
+On 2026-11-17, the patch also built and the demo passed on an unrooted Samsung SM-S928B running Android 17, aarch64, with Google Play Termux `googleplay.2026.10.09`. The initial run failed with `execve(...): Permission denied` because PRoot extracted its loader under Termux's writable temporary directory. Android denied execution from there. Google Play Termux ships an executable PRoot loader in its APK, exposed as `$PREFIX/../applib/libproot-loader.so`. Setting `PROOT_LOADER` to that path made the demo pass. The demo now detects this loader automatically when available. This behavior follows the [Google Play Termux PRoot package recipe](https://github.com/termux-play-store/termux-packages/blob/master/packages/proot/build.sh).
 
 The experiment eagerly copies file contents when opened, has no cache bounds or refresh policy, and does not synchronize writes. The current hook does not prevent writes to its local cache. Do not use it with real NAS data yet.
 

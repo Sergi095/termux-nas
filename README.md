@@ -1,12 +1,12 @@
 # termux-nas
 
-`termux-nas` is a private, rootless Termux package for browsing an SMB NAS with ordinary commands. It provides `nas` and `nas-mount` commands. Run `nas mount` to open a Bash session where the NAS appears as a folder alongside your normal Termux files, commands, and Android storage.
+`termux-nas` is a rootless Termux package for browsing an SMB NAS with ordinary commands. It provides `nas` and `nas-mount` commands. Run `nas mount` to open a Bash session where the NAS appears as a folder alongside your normal Termux files, commands, and Android storage.
 
 The folder is a simulated filesystem view provided by PRoot. It exists only for commands started inside the `nas mount` session. Exiting the session disconnects it; an already-running ordinary Termux shell cannot see the live NAS folder. Common file changes are sent to SMB after each interactive shell command and again when the session exits.
 
 ## Install in Termux
 
-You need access to this private GitHub repository and a working Termux installation. Clone it once, then run the installer:
+Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://github.com/termux-play-store). Open Termux and run these commands, regardless of which source you used:
 
 ```sh
 pkg install -y git
@@ -17,7 +17,9 @@ bash install.sh
 nas --help
 ```
 
-Authenticate with GitHub when cloning if prompted. The installer adds the `nas` commands to Termux, installs Python dependencies, and builds the patched PRoot binary automatically. You do not need a separate PRoot checkout. After installation, run `nas` from any directory. The installer detects the executable PRoot loader shipped with Google Play Termux.
+The repository is public, so cloning does not require a GitHub login. The installer adds `nas` and `nas-mount` to Termux, installs Python dependencies, builds the patched PRoot binary, and checks that PRoot can start a Termux command. The first install can take a few minutes; later runs reuse the PRoot build. You do not need root, a separate PRoot checkout, or an Android add-on APK.
+
+Google Play Termux uses its app-provided executable PRoot loader when present. F-Droid and GitHub builds use the loader bundled in the patched PRoot. Termux APKs from these sources have different signatures; see [Termux's installation notes](https://github.com/termux/termux-app#installation) before switching the Termux app itself between sources.
 
 If you already have the repository, update the installed package with:
 
@@ -30,6 +32,8 @@ bash install.sh
 ```
 
 The installer skips rebuilding PRoot when its source version and patch have not changed.
+
+After installing, follow [Add a NAS connection](#add-a-nas-connection). The full command reference is in [docs/cli.md](docs/cli.md).
 
 ## Add a NAS connection
 

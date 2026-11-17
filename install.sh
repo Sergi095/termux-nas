@@ -14,6 +14,7 @@ installed_proot="$installed_dir/proot"
 stamp_file="$installed_dir/build-id"
 
 pkg install -y git clang make libtalloc python python-cryptography python-pycryptodomex curl
+mkdir -p "$PREFIX/tmp"
 
 patch_hash="$(sha256sum "$patch_file" | cut -d ' ' -f 1)"
 build_id="$(uname -m):$source_commit:$patch_hash"
@@ -50,4 +51,12 @@ constraints_file="$(mktemp "$PREFIX/tmp/termux-nas-constraints.XXXXXXXX")"
 trap 'rm -f "$constraints_file"' EXIT
 printf 'cryptography==%s\n' "$crypto_version" > "$constraints_file"
 python -m pip install --constraint "$constraints_file" "$repo_dir"
+app_loader="$PREFIX/../applib/libproot-loader.so"
+if [[ -f "$app_loader" ]]; then
+    printf 'Checking patched PRoot with the app-provided loader...\n'
+    PROOT_LOADER="$(realpath "$app_loader")" "$installed_proot" -r / "$PREFIX/bin/true"
+else
+    printf 'Checking patched PRoot with its bundled loader...\n'
+    "$installed_proot" -r / "$PREFIX/bin/true"
+fi
 printf '\nInstalled. Add a NAS with `nas add` if needed, then run `nas mount NAME`.\n'

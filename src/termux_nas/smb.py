@@ -69,3 +69,80 @@ class SMBBackend:
 
     def write(self, path: str) -> BinaryIO:
         return self._client.open_file(self._unc(path), mode="xb", port=self._port)
+
+
+class SMBAllSharesBackend:
+    """Expose accessible disk shares as directories below one virtual root."""
+
+    def __init__(self, host: str, user: str, password: str, port: int = 445):
+        from impacket.smbconnection import SMBConnection
+
+        domain, separator, username = user.partition("\\")
+        if not separator:
+            username, domain = user, ""
+        connection = SMBConnection(host, host, sess_port=port, timeout=15)
+        try:
+            connection.login(username, password, domain)
+            shares = connection.listShares()
+        except Exception as error:
+            raise ValueError(f"Could not list shares on {host}; use --share for a single share: {error}") from error
+        finally:
+            try:
+                connection.logoff()
+            except Exception:
+                pass
+
+        self._shares: dict[str, SMBBackend] = {}
+        for entry in shares:
+            name = str(entry["shi1_netname"]).rstrip("\x00")
+            share_type = int(entry["shi1_type"]) & 0xFFFF
+            if (share_type != 0 or name.upper() == "IPC$" or not name or
+                    any(char in name for char in "/\\\x00")):
+                continue
+            backend = SMBBackend(host, name, user, password, port)
+            try:
+                if backend.is_dir(""):
+                    self._shares[name] = backend
+            except OSError:
+                # Servers often advertise shares this account cannot access.
+                continue
+        if not self._shares:
+            raise ValueError(f"No accessible file shares found on {host}; specify --share if discovery is disabled")
+
+    def _select(self, path: str) -> tuple[SMBBackend, str]:
+        share, _, child = path.partition("/")
+        backend = self._shares.get(share)
+        if backend is None:
+            raise FileNotFoundError(path)
+        return backend, child
+
+    def is_dir(self, path: str) -> bool:
+        if not path:
+            return True
+        backend, child = self._select(path)
+        return True if not child else backend.is_dir(child)
+
+    def entries(self, path: str) -> list[dict]:
+        if not path:
+            return [{"name": name, "mode": "drwxr-xr-x", "size": 0, "mtime": 0}
+                    for name in sorted(self._shares, key=str.casefold)]
+        backend, child = self._select(path)
+        return backend.entries(child)
+
+    def listdir(self, path: str) -> list[str]:
+        if not path:
+            return sorted(self._shares, key=str.casefold)
+        backend, child = self._select(path)
+        return backend.listdir(child)
+
+    def stat_size(self, path: str) -> int:
+        backend, child = self._select(path)
+        return backend.stat_size(child)
+
+    def read(self, path: str) -> BinaryIO:
+        backend, child = self._select(path)
+        return backend.read(child)
+
+    def write(self, path: str) -> BinaryIO:
+        backend, child = self._select(path)
+        return backend.write(child)

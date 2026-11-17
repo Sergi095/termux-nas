@@ -13,7 +13,7 @@ def parser() -> argparse.ArgumentParser:
     add = sub.add_parser("add", help="Save NAS connection details")
     add.add_argument("name")
     add.add_argument("--host", required=True)
-    add.add_argument("--share", required=True)
+    add.add_argument("--share", help="One SMB share; omit to show all accessible shares")
     add.add_argument("--user", required=True)
     add.add_argument("--port", type=int, default=445)
     add.add_argument("--mount-name", default="nas", help="Folder name under your Termux home (default: nas)")
@@ -54,7 +54,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "list":
             for name, item in sorted(connections.items()):
                 target = item.get("mount_path") or f"~/{item.get('mount_name', 'nas')}"
-                print(f"{name}: //{item['host']}/{item['share']} ({item['user']}) -> {target}")
+                share = item.get("share") or "*"
+                print(f"{name}: //{item['host']}/{share} ({item['user']}) -> {target}")
         elif args.command == "set-mount":
             if args.name not in connections:
                 raise ValueError(f"Unknown connection: {args.name}")
@@ -81,10 +82,12 @@ def main(argv: list[str] | None = None) -> int:
                 name = next(iter(connections))
             if name not in connections:
                 raise ValueError(f"Unknown connection: {name}")
-            from .smb import SMBBackend
+            from .smb import SMBAllSharesBackend, SMBBackend
             item = connections[name]
             password = getpass.getpass(f"SMB password for {item['user']}@{item['host']}: ")
-            backend = SMBBackend(str(item["host"]), str(item["share"]), str(item["user"]), password, int(item["port"]))
+            share = item.get("share")
+            backend = (SMBBackend(str(item["host"]), str(share), str(item["user"]), password, int(item["port"]))
+                       if share else SMBAllSharesBackend(str(item["host"]), str(item["user"]), password, int(item["port"])))
             if not backend.is_dir(""):
                 raise ValueError("SMB share is not a directory")
             if args.command == "shell":

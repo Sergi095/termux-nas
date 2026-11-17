@@ -13,7 +13,7 @@ installed_dir="$PREFIX/libexec/termux-nas"
 installed_proot="$installed_dir/proot"
 stamp_file="$installed_dir/build-id"
 
-pkg install -y git clang make libtalloc python python-cryptography curl
+pkg install -y git clang make libtalloc python python-cryptography python-pycryptodomex curl
 
 patch_hash="$(sha256sum "$patch_file" | cut -d ' ' -f 1)"
 build_id="$(uname -m):$source_commit:$patch_hash"

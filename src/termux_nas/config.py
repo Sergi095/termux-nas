@@ -37,12 +37,12 @@ def save(connections: dict[str, dict[str, object]]) -> None:
             os.unlink(temp)
 
 
-def validate(name: str, host: str, share: str, user: str, port: int, mount_name: str = "nas") -> None:
+def validate(name: str, host: str, share: str | None, user: str, port: int, mount_name: str = "nas") -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
         raise ValueError("Connection name must use letters, digits, dots, dashes or underscores")
     if not host or any(char in host for char in "/\\\x00"):
         raise ValueError("Invalid NAS host")
-    if not share or any(char in share for char in "/\\\x00"):
+    if share is not None and (not share or any(char in share for char in "/\\\x00")):
         raise ValueError("Invalid SMB share")
     if not user:
         raise ValueError("SMB username is required")

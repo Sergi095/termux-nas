@@ -33,15 +33,26 @@ The installer skips rebuilding PRoot when its source version and patch have not 
 
 ## Add a NAS connection
 
-Replace the host, share, and username with your NAS details:
+Replace the host and username with your NAS details. With no `--share` option, the account's accessible file shares appear as folders under `~/nas`:
+
+```sh
+nas add home --host 192.168.1.10 --user your_username
+nas list
+nas mount home
+cd ~/nas
+ls
+cd Shared
+```
+
+To show only one share directly at `~/nas`, specify it when adding the connection:
 
 ```sh
 nas add home --host 192.168.1.10 --share Shared --user your_username
-nas list
 nas mount home
+cd ~/nas
 ```
 
-`home` is the connection name; choose any name you like. The SMB password is requested when connecting and is not saved. If you have only one saved connection, `nas mount` can omit the name. `nas remove home` forgets the connection.
+`home` is the connection name; choose any name you like. The SMB password is requested when connecting and is not saved. Share discovery uses the SMB server's share listing and skips shares that are not accessible to the account. Some servers disable share listing; on those servers use `--share`. If you have only one saved connection, `nas mount` can omit the name. `nas remove home` forgets the connection.
 
 By default the NAS appears at `~/nas` inside the session. You can change its default folder name under your Termux home:
 

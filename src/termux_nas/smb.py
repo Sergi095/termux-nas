@@ -42,13 +42,25 @@ class SMBBackend:
     def entries(self, path: str) -> list[dict]:
         result = []
         for entry in self._client.scandir(self._unc(path), port=self._port):
-            child = path.rstrip("/") + "/" + entry.name if path else entry.name
-            details = self._stat(child)
+            if entry.is_symlink():
+                continue
+            info = getattr(entry, "smb_info", None)
+            if info is not None:
+                is_directory = entry.is_dir(follow_symlinks=False)
+                mode = "drwxr-xr-x" if is_directory else "-rw-r--r--"
+                size = info.end_of_file
+                mtime = info.last_write_time.timestamp()
+            else:
+                child = path.rstrip("/") + "/" + entry.name if path else entry.name
+                details = self._stat(child)
+                mode = stat_module.filemode(details.st_mode)
+                size = details.st_size
+                mtime = details.st_mtime
             result.append({
                 "name": entry.name,
-                "mode": stat_module.filemode(details.st_mode),
-                "size": details.st_size,
-                "mtime": details.st_mtime,
+                "mode": mode,
+                "size": size,
+                "mtime": mtime,
             })
         return sorted(result, key=lambda item: item["name"].casefold())
 

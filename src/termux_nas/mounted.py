@@ -13,7 +13,9 @@ from .hydrate import HydrationServer, Hydrator
 
 
 def _patched_proot(explicit: str | None) -> Path:
-    candidates = [explicit, os.environ.get("TERMUX_NAS_PROOT"), str(Path.home() / "repos/proot-nasfs/src/proot")]
+    installed = Path(os.environ["PREFIX"]) / "libexec/termux-nas/proot" if os.environ.get("PREFIX") else None
+    candidates = [explicit, os.environ.get("TERMUX_NAS_PROOT"), installed,
+                  Path.home() / "repos/proot-nasfs/src/proot"]
     for candidate in candidates:
         if candidate:
             path = Path(candidate).expanduser().resolve()
@@ -21,7 +23,7 @@ def _patched_proot(explicit: str | None) -> Path:
                 return path
             if candidate == explicit:
                 raise ValueError(f"Patched PRoot is not executable: {path}")
-    raise ValueError("Build the patched PRoot in ~/repos/proot-nasfs, or pass --proot PATH")
+    raise ValueError("Run bash install.sh to install the patched PRoot, or pass --proot PATH")
 
 
 def _environment(mount: Path, socket_path: Path) -> dict[str, str]:

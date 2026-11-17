@@ -11,14 +11,19 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 
 class Hydrator:
-    def __init__(self, mount: Path, backend):
+    def __init__(self, mount: Path, backend, metadata_ttl: float = 2.0):
         self.mount = mount
         self.backend = backend
+        self.metadata_ttl = metadata_ttl
         self.hydrated: set[str] = set()
+        self.kinds: dict[str, bool] = {}
+        self.listed_until: dict[str, float] = {}
+        self.missing_until: dict[str, float] = {}
         self.lock = threading.Lock()
 
     def ensure(self, raw_path: str, action: str) -> None:
@@ -29,18 +34,36 @@ class Hydrator:
         if relative == ".":
             relative = ""
         with self.lock:
-            if self.backend.is_dir(relative):
+            now = time.monotonic()
+            if self.missing_until.get(relative, 0) > now:
+                raise FileNotFoundError(relative)
+            directory = self.kinds.get(relative)
+            if directory is None:
+                try:
+                    directory = self.backend.is_dir(relative)
+                except FileNotFoundError:
+                    self.missing_until[relative] = now + self.metadata_ttl
+                    raise
+                self.kinds[relative] = directory
+            if directory:
+                if self.listed_until.get(relative, 0) > now:
+                    return
                 absolute.mkdir(parents=True, exist_ok=True)
                 for entry in self.backend.entries(relative):
                     name = entry["name"]
                     if name in (".", "..") or any(char in name for char in "/\\\x00"):
                         continue
                     child = absolute / name
-                    if entry["mode"].startswith("d"):
+                    child_relative = f"{relative}/{name}" if relative else name
+                    child_is_dir = entry["mode"].startswith("d")
+                    self.kinds[child_relative] = child_is_dir
+                    self.missing_until.pop(child_relative, None)
+                    if child_is_dir:
                         child.mkdir(exist_ok=True)
                     elif not child.exists():
                         with child.open("xb") as output:
                             output.truncate(entry["size"])
+                self.listed_until[relative] = time.monotonic() + self.metadata_ttl
                 return
 
             absolute.parent.mkdir(parents=True, exist_ok=True)

@@ -9,11 +9,15 @@ from termux_nas.hydrate import Hydrator
 class FakeBackend:
     def __init__(self):
         self.reads = []
+        self.dir_checks = 0
+        self.listings = 0
 
     def is_dir(self, path):
+        self.dir_checks += 1
         return path in ("", "Photos")
 
     def entries(self, path):
+        self.listings += 1
         names = {"": [("Photos", True), ("hello.txt", False)], "Photos": [("pic.txt", False)]}[path]
         return [{"name": name, "mode": "drwxr-xr-x" if directory else "-rw-r--r--", "size": 7} for name, directory in names]
 
@@ -39,6 +43,17 @@ class HydratorTests(unittest.TestCase):
             hydrator.ensure(str(mount / "hello.txt"), "O")
             self.assertEqual((mount / "hello.txt").read_bytes(), b"content")
             self.assertEqual(backend.reads, ["hello.txt"])
+
+    def test_repeated_directory_checks_use_cached_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            backend = FakeBackend()
+            hydrator = Hydrator(mount, backend)
+            for _ in range(20):
+                hydrator.ensure(str(mount), "M")
+            self.assertEqual(backend.dir_checks, 1)
+            self.assertEqual(backend.listings, 1)
 
 
 if __name__ == "__main__":

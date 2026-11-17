@@ -6,23 +6,17 @@ This is a process-scoped filesystem view, not an Android kernel mount. A command
 
 ## Install the experimental version
 
-Use the `proot-spike` branch. If you already built the first PRoot patch, update that source tree with the small incremental patch and rebuild:
+Use the `proot-spike` branch. On the phone, install or update with:
 
 ```sh
 cd ~/repos/termux-nas
 git switch proot-spike
 git pull --ff-only
-
-cd ~/repos/proot-nasfs
-git apply ~/repos/termux-nas/experiments/proot/upgrade-readonly.patch
-make -C src
-
-cd ~/repos/termux-nas
-python -m pip install .
+bash install.sh
 nas-mount --help
 ```
 
-For a fresh PRoot source tree, follow [the full build instructions](experiments/proot/README.md). The PRoot binary is found automatically at `~/repos/proot-nasfs/src/proot`; use `nas-mount --proot PATH` if it lives elsewhere. Google Play Termux's bundled executable PRoot loader is detected automatically.
+The installer downloads a pinned PRoot source release and builds the NAS patch locally, then installs the Python command and its dependencies. You do not need to manage a separate PRoot source checkout. Repeating `bash install.sh` skips the PRoot build when its version and patch are unchanged. Google Play Termux's bundled executable PRoot loader is detected automatically. For a manual build, see [the PRoot experiment instructions](experiments/proot/README.md).
 
 ## Connect
 
@@ -48,7 +42,7 @@ ls
 exit
 ```
 
-Writes to the NAS path are blocked with a read-only filesystem error. The bridge has no write synchronization or cache refresh yet. This branch was tested against a local SMB2 server on Linux and with a local fixture on an Android 17 aarch64 phone; a live NAS connection on the phone still needs verification.
+Writes to the NAS path are blocked with a read-only filesystem error. Directory metadata is reused for two seconds to reduce NAS round trips while browsing. Opened files are cached for the rest of the session, so changes made elsewhere to a file may not appear until you exit and run `nas-mount` again. PRoot still traces filesystem operations, so the session will be slower than an ordinary Termux shell. This branch was tested against a local SMB2 server on Linux and with a local fixture on an Android 17 aarch64 phone; a live NAS connection on the phone still needs verification.
 
 If `~/nas` already exists, `nas-mount` refuses to replace it. Use another mount name. An abrupt process kill can leave the temporary local directory behind; inspect it before removing it. The older `nas shell` command remains a limited Bash-command preview and does not provide the filesystem view described here.
 

@@ -13,7 +13,7 @@ installed_dir="$PREFIX/libexec/termux-nas"
 installed_proot="$installed_dir/proot"
 stamp_file="$installed_dir/build-id"
 
-pkg install -y git clang make libtalloc python python-cryptography python-pycryptodomex curl
+pkg install -y git clang make libtalloc python python-cryptography python-pycryptodomex
 mkdir -p "$PREFIX/tmp"
 
 patch_hash="$(sha256sum "$patch_file" | cut -d ' ' -f 1)"
@@ -29,9 +29,23 @@ if [[ ! -x "$installed_proot" || "$current_id" != "$build_id" ]]; then
     build_dir="$(mktemp -d "$cache_root/build.XXXXXXXX")"
     mkdir -p "$build_dir/source"
     printf 'Downloading pinned Termux PRoot source...\n'
-    curl --fail --location --retry 3 --silent --show-error \
-        "https://github.com/termux/proot/archive/$source_commit.tar.gz" \
-        -o "$build_dir/source.tar.gz"
+    python - "$source_commit" "$build_dir/source.tar.gz" <<'PY'
+import shutil
+import sys
+import time
+from urllib.request import urlopen
+
+url = f"https://github.com/termux/proot/archive/{sys.argv[1]}.tar.gz"
+for attempt in range(3):
+    try:
+        with urlopen(url, timeout=45) as response, open(sys.argv[2], "wb") as output:
+            shutil.copyfileobj(response, output)
+        break
+    except Exception:
+        if attempt == 2:
+            raise
+        time.sleep(2 ** attempt)
+PY
     tar -xzf "$build_dir/source.tar.gz" -C "$build_dir/source" --strip-components=1
     (cd "$build_dir/source" && git apply "$patch_file")
     printf 'Building the patched PRoot (log: %s)...\n' "$build_dir/build.log"

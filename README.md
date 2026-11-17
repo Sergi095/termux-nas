@@ -33,6 +33,8 @@ bash install.sh
 
 The installer skips rebuilding PRoot when its source version and patch have not changed.
 
+If an older Termux bootstrap reports a broken `curl` while installing packages, run `apt update && apt full-upgrade` in Termux, then run `bash install.sh` again. The installer downloads PRoot with Python, so it does not upgrade `curl` just for this package.
+
 After installing, follow [Add a NAS connection](#add-a-nas-connection). The full command reference is in [docs/cli.md](docs/cli.md).
 
 ## Add a NAS connection

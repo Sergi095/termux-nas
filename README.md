@@ -37,6 +37,8 @@ If an older Termux bootstrap reports a broken `curl` while installing packages, 
 
 After installing, follow [Add a NAS connection](#add-a-nas-connection). The full command reference is in [docs/cli.md](docs/cli.md).
 
+To check the CLI and patched PRoot locally without a NAS, run `bash ~/repos/termux-nas/tests/termux_smoke.sh`. A real NAS connection is still needed to check SMB login and your account's share permissions.
+
 ## Add a NAS connection
 
 Replace the host and username with your NAS details. With no `--share` option, the account's accessible file shares appear as folders under `~/nas`:

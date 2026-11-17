@@ -10,6 +10,9 @@ from termux_nas.mounted import run_mounted_shell
 
 
 class FakeBackend:
+    def __init__(self):
+        self.uploads = {}
+
     def is_dir(self, path):
         if path == "":
             return True
@@ -26,19 +29,39 @@ class FakeBackend:
     def read(self, path):
         return io.BytesIO(b"NAS content\n")
 
+    def upload(self, path, source, overwrite):
+        self.uploads[path] = source.read()
+
 
 class MountedShellTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
-    def test_normal_commands_see_both_trees_and_writes_fail(self):
+    def test_normal_commands_read_local_and_remote_and_upload(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             (home / "local.txt").write_text("local content\n", encoding="utf-8")
             bash = shutil.which("bash")
-            script = 'cd "$HOME/nas" && find . -type f && cat hello.txt && cat "$HOME/local.txt" && ! cp "$HOME/local.txt" "$HOME/nas/new.txt"'
+            script = 'cd "$HOME/nas" && find . -type f && cat hello.txt && cat "$HOME/local.txt" && cp "$HOME/local.txt" "$HOME/nas/new.txt"'
+            backend = FakeBackend()
             with patch.dict(os.environ, {"HOME": str(home)}):
-                status = run_mounted_shell(FakeBackend(), "nas", os.environ["TERMUX_NAS_TEST_PROOT"], [bash, "-c", script])
+                status = run_mounted_shell(backend, "nas", os.environ["TERMUX_NAS_TEST_PROOT"], [bash, "-c", script])
             self.assertEqual(status, 0)
+            self.assertEqual(backend.uploads["new.txt"], b"local content\n")
             self.assertFalse((home / "nas").exists())
+
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
+    def test_failed_upload_keeps_local_copy(self):
+        class DeniedBackend(FakeBackend):
+            def upload(self, path, source, overwrite):
+                raise PermissionError("NAS account cannot write")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            bash = shutil.which("bash")
+            with patch.dict(os.environ, {"HOME": str(home)}):
+                status = run_mounted_shell(DeniedBackend(), "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                                           [bash, "-c", 'printf "save me" > "$HOME/nas/new.txt"'])
+            self.assertNotEqual(status, 0)
+            self.assertEqual((home / "nas" / "new.txt").read_text(), "save me")
 
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
     def test_existing_custom_folder_is_preserved(self):

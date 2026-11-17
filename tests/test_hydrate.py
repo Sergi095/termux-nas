@@ -67,6 +67,51 @@ class HydratorTests(unittest.TestCase):
             self.assertFalse((mount / "Photos").exists())
             self.assertFalse((mount / "hello.txt").exists())
 
+    def test_new_local_directory_clears_previous_missing_lookup(self):
+        class MissingBackend(FakeBackend):
+            def is_dir(self, path):
+                if path == "new-dir":
+                    raise FileNotFoundError(path)
+                return super().is_dir(path)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            hydrator = Hydrator(mount, MissingBackend())
+            with self.assertRaises(FileNotFoundError):
+                hydrator.ensure(str(mount / "new-dir"), "M")
+            hydrator.ensure(str(mount / "new-dir"), "P")
+            (mount / "new-dir").mkdir()
+            hydrator.ensure(str(mount / "new-dir"), "M")
+
+    def test_external_change_prevents_overwrite(self):
+        class ConflictBackend(FakeBackend):
+            def __init__(self):
+                super().__init__()
+                self.remote_version = (7, 1)
+                self.uploads = []
+
+            def version(self, path):
+                return self.remote_version
+
+            def upload(self, path, source, overwrite):
+                self.uploads.append(path)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            backend = ConflictBackend()
+            hydrator = Hydrator(mount, backend)
+            hydrator.ensure(str(mount), "M")
+            hydrator.ensure(str(mount / "hello.txt"), "O")
+            backend.remote_version = (7, 2)
+            hydrator.ensure(str(mount / "hello.txt"), "W")
+            (mount / "hello.txt").write_text("changes", encoding="utf-8")
+            with self.assertRaisesRegex(OSError, "changed outside"):
+                hydrator.sync()
+            self.assertEqual(backend.uploads, [])
+            self.assertEqual((mount / "hello.txt").read_text(encoding="utf-8"), "changes")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,11 +10,11 @@ Termux's PRoot uses `ptrace` to rewrite filesystem paths for child processes wit
 
 References: [Termux PRoot source](https://github.com/termux/proot), [extension API](https://github.com/termux/proot/blob/master/src/extension/extension.h), [Termux maintainer discussion](https://github.com/termux/termux-app/issues/3282).
 
-## Implementation sequence
+## Implementation status
 
-1. **Read-only proof of concept (implemented on `proot-spike`):** attach a PRoot extension that detects paths below the configured NAS folder and asks the SMB service to materialize directory entries and file data in a private cache before the traced syscall continues. Test `command ls`, `find`, and `cat` without Bash overrides.
-2. **Metadata and caching:** handle directory refresh, file size and timestamps, symlinks or unsupported SMB features, and stale entries after network changes. Keep cache use bounded.
-3. **Writes:** track file descriptors and operations such as `openat`, `write`, `close`, `rename`, `unlink`, and `mkdir`; upload changes safely and report network failures. A partial local cache must never silently appear as a successful remote write.
-4. **Termux integration (partially implemented):** launch the user's shell and child programs under the patched PRoot while retaining access to Termux paths. The fixture demo passed on Android 17 aarch64; `nas-mount` with a live NAS still needs phone validation.
+1. **Path hydration:** the patched PRoot asks a Python service to populate cache entries so ordinary `ls`, `find`, `cat`, and `cd` work. Directory metadata is reused briefly to reduce SMB requests.
+2. **Share discovery:** a connection without `--share` lists the account's accessible file shares as folders under the NAS path.
+3. **Limited writes:** supported path operations change the local cache, then the bridge sends the changes to SMB after each interactive command and on shell exit. SMB errors are reported during sync; failed changes leave the local cache for recovery. Changed remote files are checked before overwriting.
+4. **Remaining gaps:** SMB errors cannot always be returned by the original command, and Unix metadata operations, symlinks, cross-share renames, concurrent directory changes, and cache bounds need more work. A live writable NAS session on the Android phone still needs verification.
 
 This is a process-scoped virtual filesystem, not a kernel mount. Programs outside the traced session and other Android apps will not see the NAS path. PRoot can slow filesystem-heavy commands and may not support every Termux program; this needs device testing before claiming normal behavior.

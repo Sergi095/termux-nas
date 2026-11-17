@@ -36,11 +36,11 @@ index 7df1fa0..5188d5d 100644
  #endif /* EXTENSION_H */
 diff --git a/src/extension/nasfs/nasfs.c b/src/extension/nasfs/nasfs.c
 new file mode 100644
-index 0000000..3d8b671
+index 0000000..29e0012
 --- /dev/null
 +++ b/src/extension/nasfs/nasfs.c
-@@ -0,0 +1,128 @@
-+/* Read-only NAS filesystem hydration experiment for PRoot. */
+@@ -0,0 +1,163 @@
++/* NAS filesystem hydration and command-boundary write-through for PRoot. */
 +#include <arpa/inet.h>
 +#include <errno.h>
 +#include <fcntl.h>
@@ -66,6 +66,17 @@ index 0000000..3d8b671
 +        data += count;
 +        size -= count;
 +    }
++    return 0;
++}
++
++static int mark_dirty(void)
++{
++    const char *marker = getenv("PROOT_NAS_DIRTY_MARKER");
++    int fd;
++    if (marker == NULL) return 0;
++    fd = open(marker, O_CREAT | O_WRONLY, 0600);
++    if (fd < 0) return -EIO;
++    close(fd);
 +    return 0;
 +}
 +
@@ -121,16 +132,26 @@ index 0000000..3d8b671
 +           (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0;
 +}
 +
-+static int is_write_path(Sysnum sysnum)
++static int is_supported_mutation(Sysnum sysnum)
 +{
 +    switch (sysnum) {
-+    case PR_mkdir: case PR_mkdirat: case PR_mknod: case PR_mknodat:
++    case PR_mkdir: case PR_mkdirat:
 +    case PR_unlink: case PR_unlinkat: case PR_rmdir:
 +    case PR_rename: case PR_renameat: case PR_renameat2:
++    case PR_truncate: case PR_utime: case PR_utimes: case PR_utimensat:
++        return 1;
++    default:
++        return 0;
++    }
++}
++
++static int is_unsupported_mutation(Sysnum sysnum)
++{
++    switch (sysnum) {
++    case PR_mknod: case PR_mknodat:
 +    case PR_link: case PR_linkat: case PR_symlink: case PR_symlinkat:
 +    case PR_chmod: case PR_fchmodat: case PR_fchmodat2:
 +    case PR_chown: case PR_lchown: case PR_fchownat:
-+    case PR_truncate: case PR_utime: case PR_utimes: case PR_utimensat:
 +    case PR_setxattr: case PR_lsetxattr: case PR_removexattr:
 +    case PR_lremovexattr:
 +        return 1;
@@ -162,9 +183,23 @@ index 0000000..3d8b671
 +        (path[strlen(mount)] != '/' && path[strlen(mount)] != '\0'))
 +        return 0;
 +    sysnum = get_sysnum(TRACEE(extension), ORIGINAL);
-+    if (is_write_path(sysnum) || is_write_open(TRACEE(extension), sysnum))
++    if (is_unsupported_mutation(sysnum))
 +        return -EROFS;
-+    action = (sysnum == PR_open || sysnum == PR_openat ||
-+              sysnum == PR_openat2 || sysnum == PR_creat) ? 'O' : 'M';
-+    return hydrate(path, action);
++    if (is_write_open(TRACEE(extension), sysnum) || sysnum == PR_truncate ||
++        sysnum == PR_utime || sysnum == PR_utimes || sysnum == PR_utimensat)
++        action = 'W';
++    else if (sysnum == PR_rename || sysnum == PR_renameat || sysnum == PR_renameat2)
++        action = 'R';
++    else if (is_supported_mutation(sysnum))
++        action = 'P';
++    else if (sysnum == PR_open || sysnum == PR_openat ||
++             sysnum == PR_openat2 || sysnum == PR_creat)
++        action = 'O';
++    else
++        action = 'M';
++    length = hydrate(path, action);
++    if (length < 0) return length;
++    if (action == 'W' || action == 'P' || action == 'R')
++        return mark_dirty();
++    return 0;
 +}

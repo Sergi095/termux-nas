@@ -1,8 +1,8 @@
 # termux-nas
 
-`termux-nas` is a private, rootless Termux package for browsing an SMB NAS with ordinary commands. It provides `nas` and `nas-mount` commands. Run `nas mount` to open a Bash session where the NAS appears as a read-only folder alongside your normal Termux files, commands, and Android storage.
+`termux-nas` is a private, rootless Termux package for browsing an SMB NAS with ordinary commands. It provides `nas` and `nas-mount` commands. Run `nas mount` to open a Bash session where the NAS appears as a folder alongside your normal Termux files, commands, and Android storage.
 
-The folder is a simulated filesystem view provided by PRoot. It exists only for commands started inside the `nas mount` session. Exiting the session disconnects it; an already-running ordinary Termux shell cannot see the live NAS folder.
+The folder is a simulated filesystem view provided by PRoot. It exists only for commands started inside the `nas mount` session. Exiting the session disconnects it; an already-running ordinary Termux shell cannot see the live NAS folder. Common file changes are sent to SMB after each interactive shell command and again when the session exits.
 
 ## Install in Termux
 
@@ -78,19 +78,28 @@ For one session without changing the saved path, use `nas mount home --at ~/othe
 While the `nas mount` Bash session is open:
 
 ```sh
-cd ~/nas
+cd ~/nas/Shared
 ls -lah
 find . -type f
 cat Photos/notes.txt
 cp Photos/picture.jpg ~/storage/downloads/picture.jpg
+mkdir NewFolder
+cp ~/local.txt NewFolder/file.txt
+printf 'hello\n' > NewFolder/hello.txt
+mv NewFolder/hello.txt NewFolder/renamed.txt
+rm NewFolder/renamed.txt
 cd ~
 ls
 exit
 ```
 
-Use your chosen folder instead of `~/nas` if you changed it. The NAS folder is read-only; copying files from the NAS to local storage works, while writing to the NAS path is blocked. Your other Termux and Android storage paths remain available in the session.
+Use your chosen folder instead of `~/nas` if you changed it. If you added a connection with `--share Shared`, start at `~/nas`; otherwise enter the share folder as shown. Copying files in either direction, editing files, `touch`, `mkdir`, `mv` within one share, and `rm` are supported. Your other Termux and Android storage paths remain available in the session.
 
-Directory listings are reused for two seconds to reduce SMB requests. Opened files are cached until you exit, so a file changed on the NAS by another device may need a new `nas mount` session before you see the change. PRoot adds overhead to filesystem operations, so this shell is slower than ordinary Termux. The SMB bridge has been tested against a local SMB2 server on Linux; the PRoot fixture has been tested on an Android 17 aarch64 phone. A live NAS connection on that phone still needs verification.
+Changes become visible on the NAS after the command finishes and the Bash prompt returns. Large uploads can make the next prompt wait. For noninteractive commands, they sync before `nas mount` exits. If SMB rejects a change or the connection fails, `nas` prints the error and leaves the local files in the chosen folder for recovery. Review those files before running another mount there.
+
+This is limited write-through emulation. A command may finish locally before an SMB error is reported at the prompt. Symbolic links, hard links, ownership and permission changes, and renaming across different shares are unsupported. The local folder does not mirror SMB access control checks before each write; the server applies your account's permissions when the change syncs. Changed remote files are checked before overwriting, but concurrent renames and deletes are not fully protected.
+
+Directory listings are reused for two seconds to reduce SMB requests. Opened files are cached until you exit, so a file changed on the NAS by another device may need a new `nas mount` session before you see the change. PRoot adds overhead to filesystem operations, so this shell is slower than ordinary Termux. The writable bridge has been tested against a local SMB2 server on Linux; a live NAS connection on the Android 17 aarch64 phone still needs verification.
 
 ## Remove the package
 

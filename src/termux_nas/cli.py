@@ -23,7 +23,7 @@ def parser() -> argparse.ArgumentParser:
     set_mount.add_argument("folder")
     shell = sub.add_parser("shell", help="Open Bash with local files and a NAS folder")
     shell.add_argument("name", nargs="?")
-    mount = sub.add_parser("mount", help="Open a PRoot shell with a read-only NAS filesystem")
+    mount = sub.add_parser("mount", help="Open a PRoot shell with a NAS folder that syncs changes to SMB")
     mount.add_argument("name", nargs="?")
     mount.add_argument("--at", metavar="FOLDER", help="Use this empty folder as the NAS path for this session")
     mount.add_argument("--proot", help="Path to the patched PRoot binary")
@@ -35,6 +35,17 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] == "_sync":
+        from .hydrate import request_sync
+
+        try:
+            if len(argv) != 2:
+                raise ValueError("Usage: nas _sync SOCKET")
+            request_sync(argv[1])
+            return 0
+        except (OSError, ValueError) as error:
+            print(f"nas: sync failed: {error}", file=sys.stderr)
+            return 1
     if argv and argv[0].startswith("_"):
         from .bridge import helper
 

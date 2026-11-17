@@ -1,7 +1,20 @@
 """Small adapter around smbprotocol's high-level smbclient API."""
 
+import errno
+import shutil
 import stat as stat_module
 from typing import BinaryIO
+
+
+def _rpc_connection(host: str, user: str, password: str, port: int):
+    from impacket.smbconnection import SMBConnection
+
+    domain, separator, username = user.partition("\\")
+    if not separator:
+        username, domain = user, ""
+    connection = SMBConnection(host, host, sess_port=port, timeout=15)
+    connection.login(username, password, domain)
+    return connection
 
 
 class SMBBackend:
@@ -11,6 +24,10 @@ class SMBBackend:
 
         self._client = smbclient
         self._root = "\\\\" + host + "\\" + share
+        self._host = host
+        self._share = share
+        self._user = user
+        self._password = password
         self._port = port
         self._missing_statuses = {
             NtStatus.STATUS_NO_SUCH_FILE,
@@ -35,6 +52,10 @@ class SMBBackend:
 
     def stat_size(self, path: str) -> int:
         return self._stat(path).st_size
+
+    def version(self, path: str) -> tuple[int, int]:
+        details = self._stat(path)
+        return details.st_size, details.st_mtime_ns
 
     def listdir(self, path: str) -> list[str]:
         return sorted(self._client.listdir(self._unc(path), port=self._port), key=str.casefold)
@@ -70,27 +91,46 @@ class SMBBackend:
     def write(self, path: str) -> BinaryIO:
         return self._client.open_file(self._unc(path), mode="xb", port=self._port)
 
+    def upload(self, path: str, source: BinaryIO, overwrite: bool) -> None:
+        mode = "r+b" if overwrite else "xb"
+        with self._client.open_file(self._unc(path), mode=mode, port=self._port) as output:
+            if overwrite:
+                output.seek(0)
+                output.truncate(0)
+            shutil.copyfileobj(source, output)
+
+    def mkdir(self, path: str) -> None:
+        self._client.mkdir(self._unc(path), port=self._port)
+
+    def remove(self, path: str) -> None:
+        self._client.remove(self._unc(path), port=self._port)
+
+    def rmdir(self, path: str) -> None:
+        self._client.rmdir(self._unc(path), port=self._port)
+
+    def rename(self, source: str, destination: str) -> None:
+        connection = _rpc_connection(self._host, self._user, self._password, self._port)
+        try:
+            connection.rename(self._share, source.replace("/", "\\"), destination.replace("/", "\\"))
+        finally:
+            connection.logoff()
+
 
 class SMBAllSharesBackend:
     """Expose accessible disk shares as directories below one virtual root."""
 
     def __init__(self, host: str, user: str, password: str, port: int = 445):
-        from impacket.smbconnection import SMBConnection
-
-        domain, separator, username = user.partition("\\")
-        if not separator:
-            username, domain = user, ""
-        connection = SMBConnection(host, host, sess_port=port, timeout=15)
         try:
-            connection.login(username, password, domain)
+            connection = _rpc_connection(host, user, password, port)
             shares = connection.listShares()
         except Exception as error:
             raise ValueError(f"Could not list shares on {host}; use --share for a single share: {error}") from error
         finally:
-            try:
-                connection.logoff()
-            except Exception:
-                pass
+            if "connection" in locals():
+                try:
+                    connection.logoff()
+                except Exception:
+                    pass
 
         self._shares: dict[str, SMBBackend] = {}
         for entry in shares:
@@ -139,6 +179,10 @@ class SMBAllSharesBackend:
         backend, child = self._select(path)
         return backend.stat_size(child)
 
+    def version(self, path: str) -> tuple[int, int]:
+        backend, child = self._select(path)
+        return backend.version(child)
+
     def read(self, path: str) -> BinaryIO:
         backend, child = self._select(path)
         return backend.read(child)
@@ -146,3 +190,36 @@ class SMBAllSharesBackend:
     def write(self, path: str) -> BinaryIO:
         backend, child = self._select(path)
         return backend.write(child)
+
+    def upload(self, path: str, source: BinaryIO, overwrite: bool) -> None:
+        backend, child = self._select(path)
+        if not child:
+            raise PermissionError("Cannot replace an SMB share")
+        backend.upload(child, source, overwrite)
+
+    def mkdir(self, path: str) -> None:
+        backend, child = self._select(path)
+        if not child:
+            raise PermissionError("Cannot create an SMB share")
+        backend.mkdir(child)
+
+    def remove(self, path: str) -> None:
+        backend, child = self._select(path)
+        if not child:
+            raise PermissionError("Cannot delete an SMB share")
+        backend.remove(child)
+
+    def rmdir(self, path: str) -> None:
+        backend, child = self._select(path)
+        if not child:
+            raise PermissionError("Cannot delete an SMB share")
+        backend.rmdir(child)
+
+    def rename(self, source: str, destination: str) -> None:
+        source_backend, source_child = self._select(source)
+        destination_backend, destination_child = self._select(destination)
+        if source_backend is not destination_backend:
+            raise OSError(errno.EXDEV, "Cannot rename across SMB shares")
+        if not source_child or not destination_child:
+            raise PermissionError("Cannot rename an SMB share")
+        source_backend.rename(source_child, destination_child)

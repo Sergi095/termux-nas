@@ -4,7 +4,7 @@ The normal [installer](../../README.md#install-in-termux) downloads, patches, an
 
 The patch adds a `GUEST_PATH` extension to Termux PRoot. It asks the Python bridge to populate local cache entries before commands access a NAS path. Supported writes change that cache and sync to SMB after the shell command finishes. Unsupported metadata operations are rejected with `EROFS`.
 
-The patch targets Termux PRoot commit `52d65a4dc140ca554d241a1438ddd4f6b00c9813` (GPL-2.0-or-later). To build manually on a Linux host:
+The patch targets Termux PRoot commit `52d65a4dc140ca554d241a1438ddd4f6b00c9813` (GPL-2.0-or-later). The upstream copyright and license text is in [COPYING](COPYING). To build manually on a Linux host:
 
 ```sh
 git clone https://github.com/termux/proot.git /tmp/nasfs-proot

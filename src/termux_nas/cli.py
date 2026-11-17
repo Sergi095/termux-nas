@@ -23,6 +23,9 @@ def parser() -> argparse.ArgumentParser:
     set_mount.add_argument("folder")
     shell = sub.add_parser("shell", help="Open Bash with local files and a NAS folder")
     shell.add_argument("name", nargs="?")
+    mount = sub.add_parser("mount", help="Open a PRoot shell with a read-only NAS filesystem")
+    mount.add_argument("name", nargs="?")
+    mount.add_argument("--proot", help="Path to the patched PRoot binary")
     remove = sub.add_parser("remove", help="Forget a saved NAS connection")
     remove.add_argument("name")
     return p
@@ -62,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"Unknown connection: {args.name}")
             del connections[args.name]
             config.save(connections)
-        elif args.command == "shell":
+        elif args.command in ("shell", "mount"):
             name = args.name
             if name is None:
                 if len(connections) != 1:
@@ -71,18 +74,26 @@ def main(argv: list[str] | None = None) -> int:
             if name not in connections:
                 raise ValueError(f"Unknown connection: {name}")
             from .smb import SMBBackend
-            from .session import run_shell
-
             item = connections[name]
             password = getpass.getpass(f"SMB password for {item['user']}@{item['host']}: ")
             backend = SMBBackend(str(item["host"]), str(item["share"]), str(item["user"]), password, int(item["port"]))
             if not backend.is_dir(""):
                 raise ValueError("SMB share is not a directory")
-            return run_shell(backend, str(item.get("mount_name", "nas")))
+            if args.command == "shell":
+                from .session import run_shell
+
+                return run_shell(backend, str(item.get("mount_name", "nas")))
+            from .mounted import run_mounted_shell
+
+            return run_mounted_shell(backend, str(item.get("mount_name", "nas")), args.proot)
         return 0
     except (OSError, ValueError, KeyError) as error:
         print(f"nas: {error}", file=sys.stderr)
         return 1
+
+
+def mount_main() -> int:
+    return main(["mount", *sys.argv[1:]])
 
 
 if __name__ == "__main__":

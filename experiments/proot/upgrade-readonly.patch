@@ -1,0 +1,71 @@
+--- a/src/extension/nasfs/nasfs.c
++++ b/src/extension/nasfs/nasfs.c
+@@ -1,6 +1,7 @@
+ /* Read-only NAS filesystem hydration experiment for PRoot. */
+ #include <arpa/inet.h>
+ #include <errno.h>
++#include <fcntl.h>
+ #include <limits.h>
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -12,6 +13,7 @@
+ 
+ #include "extension/extension.h"
+ #include "syscall/sysnum.h"
++#include "tracee/mem.h"
+ 
+ static int full_write(int fd, const void *buffer, size_t size)
+ {
+@@ -58,6 +60,43 @@
+     return -EIO;
+ }
+ 
++static int is_write_open(Tracee *tracee, Sysnum sysnum)
++{
++    uint64_t flags;
++    int status;
++    if (sysnum == PR_creat) return 1;
++    if (sysnum == PR_open)
++        flags = peek_reg(tracee, ORIGINAL, SYSARG_2);
++    else if (sysnum == PR_openat)
++        flags = peek_reg(tracee, ORIGINAL, SYSARG_3);
++    else if (sysnum == PR_openat2) {
++        status = read_data(tracee, &flags,
++                           peek_reg(tracee, ORIGINAL, SYSARG_3), sizeof(flags));
++        if (status < 0) return 1;
++    }
++    else return 0;
++    return (flags & O_ACCMODE) != O_RDONLY ||
++           (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0;
++}
++
++static int is_write_path(Sysnum sysnum)
++{
++    switch (sysnum) {
++    case PR_mkdir: case PR_mkdirat: case PR_mknod: case PR_mknodat:
++    case PR_unlink: case PR_unlinkat: case PR_rmdir:
++    case PR_rename: case PR_renameat: case PR_renameat2:
++    case PR_link: case PR_linkat: case PR_symlink: case PR_symlinkat:
++    case PR_chmod: case PR_fchmodat: case PR_fchmodat2:
++    case PR_chown: case PR_lchown: case PR_fchownat:
++    case PR_truncate: case PR_utime: case PR_utimes: case PR_utimensat:
++    case PR_setxattr: case PR_lsetxattr: case PR_removexattr:
++    case PR_lremovexattr:
++        return 1;
++    default:
++        return 0;
++    }
++}
++
+ int nasfs_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2)
+ {
+     const char *mount;
+@@ -81,6 +120,8 @@
+         (path[strlen(mount)] != '/' && path[strlen(mount)] != '\0'))
+         return 0;
+     sysnum = get_sysnum(TRACEE(extension), ORIGINAL);
++    if (is_write_path(sysnum) || is_write_open(TRACEE(extension), sysnum))
++        return -EROFS;
+     action = (sysnum == PR_open || sysnum == PR_openat ||
+               sysnum == PR_openat2 || sysnum == PR_creat) ? 'O' : 'M';
+     return hydrate(path, action);

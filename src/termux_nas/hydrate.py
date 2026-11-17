@@ -8,6 +8,7 @@ import os
 import shutil
 import socketserver
 import struct
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -76,7 +77,8 @@ class HydrationHandler(socketserver.BaseRequestHandler):
             self.request.sendall(b"0")
         except FileNotFoundError:
             self.request.sendall(b"1")
-        except Exception:
+        except Exception as error:
+            print(f"nas-mount: filesystem bridge error: {error}", file=sys.stderr)
             self.request.sendall(b"2")
 
     def _read_exact(self, count: int) -> bytes | None:

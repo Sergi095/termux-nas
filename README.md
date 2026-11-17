@@ -1,72 +1,56 @@
 # termux-nas
 
-Private, rootless SMB browsing experiment for Termux.
+Experimental, rootless SMB folder for Termux. `nas-mount` simulates a read-only mount inside a PRoot-traced Bash session. Ordinary commands such as `cd`, `find`, `ls`, `cat`, and `cp` from the NAS to local storage use normal filesystem paths. Your Termux home and installed commands are visible in that same session.
 
-**Project target:** make a NAS folder behave like a filesystem for ordinary CLI programs launched inside `nas shell`, without rooting Android. The current Bash-command preview does **not** meet this target yet. Development is moving to a PRoot-style syscall bridge; see [virtual filesystem design](docs/virtual-filesystem.md).
+This is a process-scoped filesystem view, not an Android kernel mount. A command cannot change the filesystem view of the already-running parent shell. Run `nas-mount`, work in the Bash session it opens, then type `exit` to disconnect. Outside that session, `~/nas` is only a partial local cache. The temporary directory is removed on normal exit.
 
-## Current status
+## Install the experimental version
 
-`nas shell` now launches an interactive **Bash** session and loads your `~/.bashrc`. Your Termux home, installed commands, and Android storage paths stay available. One configured folder under your home (default `~/nas`) is routed to an SMB share for `cd`, `ls` (including `-a`, `-l`, and `-h`), `cat`, and single-file `cp` commands. The folder name is configurable per connection.
-
-This is a shell-level preview, **not a filesystem mount**. Programs that directly open a NAS path, such as `nano`, `find`, or `command ls`, currently see only a temporary local shadow directory. The shell bridge handles only the commands listed above. No Android NAS connection has been tested yet.
-
-## Install privately on your phone
-
-Clone or copy this private repository into Termux home, then run:
-
-```sh
-pkg install python python-cryptography bash
-cd ~/repos/termux-nas
-python -m pip install .
-nas --help
-```
-
-To update an existing install after pulling changes:
+Use the `proot-spike` branch. If you already built the first PRoot patch, update that source tree with the small incremental patch and rebuild:
 
 ```sh
 cd ~/repos/termux-nas
-git pull
+git switch proot-spike
+git pull --ff-only
+
+cd ~/repos/proot-nasfs
+git apply ~/repos/termux-nas/experiments/proot/upgrade-readonly.patch
+make -C src
+
+cd ~/repos/termux-nas
 python -m pip install .
+nas-mount --help
 ```
 
-You do not need to publish a package or APK. If `pip` fails while building `cryptography`, install `python-cryptography` from Termux first.
+For a fresh PRoot source tree, follow [the full build instructions](experiments/proot/README.md). The PRoot binary is found automatically at `~/repos/proot-nasfs/src/proot`; use `nas-mount --proot PATH` if it lives elsewhere. Google Play Termux's bundled executable PRoot loader is detected automatically.
 
 ## Connect
 
+If you already saved a connection with `nas add`, check its name with `nas list`. Otherwise add one:
+
 ```sh
-nas add home --host 192.168.1.10 --share Shared --user your_username --mount-name media
-nas list
-nas shell home
+nas add home --host 192.168.1.10 --share Shared --user your_username
+nas-mount home
 ```
 
-Existing connections created before `--mount-name` was added default to `~/nas`. Change one without re-entering the server details:
+The default directory name is `~/nas`. Change it with `nas set-mount home media`, or use `--mount-name media` with `nas add`. The SMB password is requested when connecting and is not stored in the connection file.
+
+Inside the session:
 
 ```sh
-nas set-mount home media
-```
-
-The SMB password is requested when `nas shell` starts. It stays in that process's memory and is not written to the connection file.
-
-Inside `nas shell`, local paths and commands work through Bash, while the configured NAS folder uses SMB for supported operations:
-
-```sh
-cd ~/storage/shared
-ls
-cd ~/Documents
-cat local.txt
-cd ~/media
-ls
+cd ~/nas
+find . -type f
 ls -lah
-cd Photos
-cat notes.txt
-cp picture.jpg ~/storage/downloads/picture.jpg
-cp ~/Documents/new.txt ~/media/Photos/new.txt
+cat Photos/notes.txt
+cp Photos/picture.jpg ~/storage/downloads/picture.jpg
+cd ~
+ls
 exit
 ```
 
-Run `termux-setup-storage` once if `~/storage` is not present. Single-file `cp` refuses to overwrite a destination. A failed network transfer can leave a partial destination file; remove it before retrying.
+Writes to the NAS path are blocked with a read-only filesystem error. The bridge has no write synchronization or cache refresh yet. This branch was tested against a local SMB2 server on Linux and with a local fixture on an Android 17 aarch64 phone; a live NAS connection on the phone still needs verification.
 
-The NAS folder is a temporary symlink into a private shadow directory. It is removed when `nas shell` exits. If a file or directory already has that name in your Termux home, choose another name with `nas set-mount` rather than deleting it.
+If `~/nas` already exists, `nas-mount` refuses to replace it. Use another mount name. An abrupt process kill can leave the temporary local directory behind; inspect it before removing it. The older `nas shell` command remains a limited Bash-command preview and does not provide the filesystem view described here.
 
 ## Development
 
@@ -74,4 +58,4 @@ The NAS folder is a temporary symlink into a private shadow directory. It is rem
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-The SMB adapter uses the [smbprotocol high-level `smbclient` API](https://github.com/jborean93/smbprotocol). The Bash session talks to a private Unix socket served by the parent `nas` process. Passwords are not passed as command-line arguments or stored in that socket's files.
+The SMB adapter uses the [smbprotocol `smbclient` API](https://github.com/jborean93/smbprotocol). The PRoot hook asks a private Unix socket service to populate a local cache before ordinary filesystem operations continue.

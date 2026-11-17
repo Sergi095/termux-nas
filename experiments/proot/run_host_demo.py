@@ -63,7 +63,18 @@ def main() -> int:
                 result = subprocess.run([str(proot), "-r", "/", *command], env=environment, text=True, capture_output=True, timeout=20)
                 if result.returncode or expected not in result.stdout:
                     raise AssertionError(f"{command}: {result.returncode}\n{result.stdout}\n{result.stderr}")
-            print("PASS: unmodified find, ls, cat and bash cd see NAS and local files")
+            rejected = [
+                [shutil.which("touch"), str(mount / "new.txt")],
+                [shutil.which("mkdir"), str(mount / "newdir")],
+                [shutil.which("rm"), str(mount / "hello.txt")],
+            ]
+            for command in rejected:
+                result = subprocess.run([str(proot), "-r", "/", *command], env=environment, text=True, capture_output=True, timeout=20)
+                if result.returncode == 0:
+                    raise AssertionError(f"write unexpectedly succeeded: {command}")
+            if (mount / "new.txt").exists() or (mount / "newdir").exists() or not (mount / "hello.txt").exists():
+                raise AssertionError("write changed the virtual tree")
+            print("PASS: find, ls, cat and bash cd see NAS and local files; writes are blocked")
             return 0
         finally:
             server.terminate()

@@ -35,6 +35,53 @@ class FakeBackend:
 
 
 class MountedShellTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"),
+                         "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
+    def test_restricted_dfs_child_does_not_break_root_listing(self):
+        class DfsBackend:
+            def __init__(self):
+                self.restricted_lookups = 0
+
+            def is_dir(self, path):
+                if path in ("", "Allowed", "Restricted"):
+                    return True
+                if path == "Allowed/readme.txt":
+                    return False
+                raise FileNotFoundError(path)
+
+            def entries(self, path):
+                if path == "":
+                    return [{"name": "Allowed", "mode": "drwxr-xr-x", "size": 0},
+                            {"name": "Restricted", "mode": "drwxr-xr-x", "size": 0}]
+                if path == "Allowed":
+                    return [{"name": "readme.txt", "mode": "-rw-r--r--", "size": 4}]
+                self.restricted_lookups += 1
+                raise PermissionError("SMB access denied for Restricted")
+
+            def stat_size(self, path):
+                if path == "Allowed/readme.txt":
+                    return 4
+                raise FileNotFoundError(path)
+
+            def read_range(self, path, offset, size):
+                return b"okay"[offset:offset + size]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = DfsBackend()
+            output = Path(temporary) / "listing.txt"
+            script = (f'ls -l "$HOME/nas" > {shlex.quote(str(output))} && '
+                      f'cd "$HOME/nas/Allowed" && cat readme.txt >> {shlex.quote(str(output))}')
+            with patch.dict(os.environ, {"HOME": temporary}):
+                status = run_mounted_shell(
+                    backend, "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                    [shutil.which("bash"), "-c", script], streaming=True,
+                )
+            self.assertEqual(status, 0)
+            self.assertIn("Allowed", output.read_text())
+            self.assertIn("Restricted", output.read_text())
+            self.assertTrue(output.read_text().endswith("okay"))
+            self.assertEqual(backend.restricted_lookups, 0)
+
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
     def test_streaming_reads_end_of_huge_file_without_downloading_it(self):
         size = 500 * 1024**3

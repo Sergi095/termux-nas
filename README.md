@@ -105,6 +105,8 @@ nas mount files
 
 Replace `Shared` with the actual SMB share name. Specifying `--share` skips server-wide share discovery, which some servers disable. If authentication fails, check the complete error, the account's required username format, and whether the network or server requires additional authentication setup. Do not send your password in an issue or log.
 
+A DFS namespace may list links whose targets your account cannot open. Listing the namespace folder should still show the available names; entering a restricted link reports access denied for that link. The bridge does not require access to every advertised target to browse an accessible one.
+
 By default the NAS appears at `~/nas` inside the session. You can change its default folder name under your Termux home:
 
 ```sh

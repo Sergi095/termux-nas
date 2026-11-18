@@ -36,7 +36,7 @@ index 7df1fa0..5188d5d 100644
  #endif /* EXTENSION_H */
 diff --git a/src/extension/nasfs/nasfs.c b/src/extension/nasfs/nasfs.c
 new file mode 100644
-index 0000000..4fcab12
+index 0000000..daab351
 --- /dev/null
 +++ b/src/extension/nasfs/nasfs.c
 @@ -0,0 +1,591 @@
@@ -618,7 +618,7 @@ index 0000000..4fcab12
 +        action = 'R';
 +    else if (is_supported_mutation(sysnum))
 +        action = 'P';
-+    else if (sysnum == PR_open || sysnum == PR_openat ||
++    else if (sysnum == PR_chdir || sysnum == PR_open || sysnum == PR_openat ||
 +             sysnum == PR_openat2 || sysnum == PR_creat)
 +        action = 'O';
 +    else

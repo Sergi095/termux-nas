@@ -89,6 +89,13 @@ class SMBBackend:
                 mode = "drwxr-xr-x" if is_directory else "-rw-r--r--"
                 size = info.end_of_file
                 mtime = info.last_write_time.timestamp()
+            elif entry.is_dir(follow_symlinks=False):
+                # Older smbclient releases omit smb_info. The directory entry
+                # still carries its type; stat on a restricted DFS link can
+                # fail even though the parent namespace is listable.
+                mode = "drwxr-xr-x"
+                size = 0
+                mtime = 0
             else:
                 child = path.rstrip("/") + "/" + entry.name if path else entry.name
                 details = self._stat(child)

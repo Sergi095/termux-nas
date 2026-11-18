@@ -261,6 +261,11 @@ class Hydrator:
                     return
                 if relative and action in ("P", "R"):
                     return
+                if relative and action == "M":
+                    # stat/readlink/chdir may inspect an entry in a DFS root.
+                    # Do not enumerate that directory until it is opened;
+                    # a sibling the account cannot enter must not break ls -l.
+                    return
                 if self.listed_until.get(relative, 0) > now or (self.dirty and relative in self.listed_until):
                     return
                 self._mkdir(absolute)

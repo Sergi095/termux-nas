@@ -94,16 +94,16 @@ cd ~/nas
 
 `home` is the connection name; choose any name you like. The SMB password is requested when connecting and is not saved. Share discovery uses the SMB server's share listing and skips shares that are not accessible to the account. Some servers disable share listing; on those servers use `--share`. If you have only one saved connection, `nas mount` can omit the name. `nas remove home` forgets the connection.
 
-### University or domain NAS
+### Redirected SMB shares
 
-Use the full server hostname and the username format your university provides, such as `user@university.edu`:
+Some SMB paths use a DFS referral: the server named in the connection points the client to another server that holds the share. The bridge sends the same account credentials with each SMB operation so the referred server can authenticate the request. This happens automatically. Use the server's full hostname and the username format required by the SMB account, such as `user@example.org`:
 
 ```sh
-nas add campus --host files.university.edu --share Home --user user@university.edu
-nas mount campus
+nas add files --host files.example.org --share Shared --user user@example.org
+nas mount files
 ```
 
-Replace `Home` with the actual SMB share name from the university's connection instructions. Specifying `--share` skips server-wide share discovery, which may be disabled or use a different authentication method. Some university paths redirect to another SMB server; the bridge passes the same credentials to that server. If authentication still fails, note the complete error after `SpnegoError (1)` (especially the text after `(16)`) and check whether the university requires its VPN, Kerberos, or a separate SMB password. Do not send your password in an issue or log.
+Replace `Shared` with the actual SMB share name. Specifying `--share` skips server-wide share discovery, which some servers disable. If authentication fails, check the complete error, the account's required username format, and whether the network or server requires additional authentication setup. Do not send your password in an issue or log.
 
 By default the NAS appears at `~/nas` inside the session. You can change its default folder name under your Termux home:
 

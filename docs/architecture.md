@@ -10,7 +10,7 @@ Termux command → patched PRoot → Unix socket → Python bridge → SMB serve
                  path translation   sparse local names and sizes
 ```
 
-The default range mode fetches directory entries and file sizes from SMB. It creates sparse placeholders so ordinary path operations work, then forwards supported reads and writes in byte ranges to the server. The file data passes through memory and is not stored in those placeholders. The bridge synchronizes directory changes and removes its placeholders when the session exits successfully.
+The default range mode fetches directory entries and file sizes from SMB. It creates sparse placeholders in a private temporary directory and binds it over the selected NAS path only inside PRoot. The ordinary path remains empty outside PRoot. Supported reads and writes go to the server in byte ranges; file data passes through memory and is not stored in the placeholders. The bridge synchronizes directory changes and removes its private placeholders when the session exits successfully.
 
 `nas mount --cached` selects the older mode. It downloads opened files to the backing folder and uploads changes after each interactive command or on exit. This mode has a download limit because a large NAS file could fill phone storage.
 

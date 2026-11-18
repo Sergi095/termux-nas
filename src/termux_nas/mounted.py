@@ -27,13 +27,16 @@ def _patched_proot(explicit: str | None) -> Path:
     raise ValueError("Run bash install.sh to install the patched PRoot, or pass --proot PATH")
 
 
-def _environment(mount: Path, socket_path: Path, marker: Path, streaming: bool = False) -> dict[str, str]:
+def _environment(mount: Path, socket_path: Path, marker: Path, streaming: bool = False,
+                 backing: Path | None = None) -> dict[str, str]:
     environment = os.environ.copy()
     environment["PROOT_NAS_MOUNT"] = str(mount)
     environment["PROOT_NAS_SOCKET"] = str(socket_path)
     environment["PROOT_NAS_DIRTY_MARKER"] = str(marker)
     if streaming:
         environment["PROOT_NAS_STREAM"] = "1"
+        if backing is not None:
+            environment["PROOT_NAS_BACKING"] = str(backing)
     prefix = environment.get("PREFIX")
     if prefix:
         app_loader = Path(prefix).parent / "applib" / "libproot-loader.so"
@@ -78,6 +81,12 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
 
     with tempfile.TemporaryDirectory(prefix="termux-nas-mount-") as temporary:
         Path(temporary).chmod(0o700)
+        backing = Path(temporary) / "backing" if streaming else mount
+        if streaming:
+            backing.mkdir(mode=0o700)
+        proot_command = [str(proot), "-r", "/"]
+        if streaming:
+            proot_command.extend(["-b", f"{backing}:{mount}"])
         socket_path = Path(temporary) / "nas.sock"
         marker = Path(temporary) / "nas.dirty"
         rcfile = Path(temporary) / "bashrc"
@@ -87,7 +96,7 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
             'PROMPT_COMMAND="_nas_sync_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}"\n',
             encoding="utf-8",
         )
-        hydrator = Hydrator(mount, backend, marker=marker,
+        hydrator = Hydrator(backing, backend, marker=marker,
                             max_download_bytes=limit_mb * 1024 * 1024,
                             streaming=streaming)
         preserve_cache = False
@@ -96,25 +105,26 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 try:
-                    environment = _environment(mount, socket_path, marker, streaming)
+                    environment = _environment(mount, socket_path, marker, streaming, backing)
                     # Unsupported metadata writes must remain blocked by PRoot.
                     ls = shutil.which("ls")
                     chmod = shutil.which("chmod")
                     if ls is None or chmod is None:
                         raise ValueError("ls and chmod are required for nas-mount")
                     read_check = subprocess.run(
-                        [str(proot), "-r", "/", ls, str(mount)],
+                        [*proot_command, ls, str(mount)],
                         env=environment, cwd=home, stdout=subprocess.DEVNULL,
                         stderr=subprocess.PIPE, text=True,
                     )
                     if read_check.returncode:
                         raise ValueError(f"PRoot could not read the NAS folder: {read_check.stderr.strip()}")
                     write_check = subprocess.run(
-                        [str(proot), "-r", "/", chmod, "711", str(mount)],
+                        [*proot_command, chmod, "711", str(mount)],
                         env=environment, cwd=home, stdout=subprocess.DEVNULL,
                         stderr=subprocess.PIPE, text=True,
                     )
-                    if write_check.returncode == 0 or stat.S_IMODE(mount.stat().st_mode) != original_mode:
+                    if (write_check.returncode == 0 or stat.S_IMODE(mount.stat().st_mode) != original_mode or
+                            (streaming and stat.S_IMODE(backing.stat().st_mode) != 0o700)):
                         raise ValueError("Patched PRoot lacks the metadata guard; rebuild it with the latest patch")
                     probe_roots = [] if streaming else [mount]
                     if probe_roots and hasattr(backend, "write_probe_roots"):
@@ -123,7 +133,7 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                         probe = root / f".nas-write-probe-{os.getpid()}"
                         try:
                             write_probe = subprocess.run(
-                                [str(proot), "-r", "/", bash, "-c", 'printf x > "$1"', "bash", str(probe)],
+                                [*proot_command, bash, "-c", 'printf x > "$1"', "bash", str(probe)],
                                 env=environment, cwd=home, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.PIPE, text=True,
                             )
@@ -140,24 +150,31 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                             print(f"NAS is available at {mount}. Changes sync after each command and on exit. "
                                   f"Downloads are limited to {limit_mb} MiB per session.")
                     shell_status = subprocess.call(
-                        [str(proot), "-r", "/", *(command or [bash, "--rcfile", str(rcfile), "-i"])],
+                        [*proot_command, *(command or [bash, "--rcfile", str(rcfile), "-i"])],
                         env=environment, cwd=home,
                     )
                     try:
                         hydrator.sync()
                     except Exception as error:
                         preserve_cache = True
-                        print(f"nas: sync failed: {error}; unsynced files remain at {mount}", file=sys.stderr)
+                        if streaming:
+                            print(f"nas: sync failed: {error}; preserving private recovery files", file=sys.stderr)
+                        else:
+                            print(f"nas: sync failed: {error}; unsynced files remain at {mount}", file=sys.stderr)
                         return shell_status or 1
                     return shell_status
                 finally:
                     server.shutdown()
                     thread.join(timeout=2)
         finally:
-            if not preserve_cache and not hydrator.dirty and mount.is_dir() and not mount.is_symlink():
+            if not preserve_cache and not hydrator.dirty and backing.is_dir():
                 hydrator.cleanup()
-                if created_mount:
-                    try:
-                        mount.rmdir()
-                    except OSError:
-                        pass
+            if streaming and backing.is_dir() and (preserve_cache or any(backing.iterdir())):
+                recovery = Path(tempfile.mkdtemp(prefix="termux-nas-recovery-")) / "backing"
+                shutil.move(str(backing), str(recovery))
+                print(f"nas: local recovery files remain at {recovery}", file=sys.stderr)
+            if created_mount and mount.is_dir() and not mount.is_symlink():
+                try:
+                    mount.rmdir()
+                except OSError:
+                    pass

@@ -2,7 +2,7 @@
 
 The normal [installer](../../README.md#install-in-termux) downloads, patches, and builds PRoot automatically. These instructions are for developing the C hook.
 
-The patch adds a `GUEST_PATH` extension to Termux PRoot. In the default mode it asks the Python bridge to populate local cache entries before commands access a NAS path. Supported writes change that cache and sync to SMB after the shell command finishes. Unsupported metadata operations are rejected. In experimental `--range-io` mode it also intercepts file descriptor reads, writes, and truncation, and sends those operations to SMB in byte ranges. Sparse local files supply names and sizes only; unsupported I/O calls fail explicitly.
+The patch adds a `GUEST_PATH` extension to Termux PRoot. In the default range mode, PRoot binds a private temporary directory over the selected NAS path inside the traced session. The Python bridge creates sparse directory entries there, while the hook sends supported file descriptor reads, writes, and truncation to SMB in byte ranges. Sparse local files supply names and sizes only; unsupported I/O calls fail explicitly. `--cached` uses the older local cache and command-boundary sync behavior.
 
 The patch targets Termux PRoot commit `52d65a4dc140ca554d241a1438ddd4f6b00c9813` (GPL-2.0-or-later). The upstream copyright and license text is in [COPYING](COPYING). To build manually on a Linux host:
 

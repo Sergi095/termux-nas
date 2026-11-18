@@ -254,6 +254,9 @@ class MountedShellTests(unittest.TestCase):
             def create_file(self, path):
                 if path in self.files:
                     raise FileExistsError(path)
+                # The ordinary Termux path must stay empty while this PRoot
+                # session creates a file in its private bind directory.
+                self.assert_guest_mount_empty()
                 self.files[path] = bytearray()
 
             def truncate(self, path, size):
@@ -271,6 +274,8 @@ class MountedShellTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             backend = RangeBackend()
+            backend.assert_guest_mount_empty = lambda: self.assertEqual(
+                list((Path(temporary) / "nas").iterdir()), [])
             script = ('cd "$HOME/nas" && '
                       'vi -Nu NONE -es new.txt -c "normal! ihello" -c wq && '
                       'vi -Nu NONE -es existing.txt -c "normal! ggInew " -c wq && '
@@ -288,6 +293,7 @@ class MountedShellTests(unittest.TestCase):
             self.assertEqual(bytes(backend.files["existing.txt"]), b"new old\n")
             self.assertEqual(bytes(backend.files["moved.txt"]), b"copy")
             self.assertEqual(set(backend.files), {"new.txt", "existing.txt", "moved.txt"})
+            self.assertFalse((Path(temporary) / "nas").exists())
 
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
     def test_huge_file_is_not_downloaded(self):

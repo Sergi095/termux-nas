@@ -6,13 +6,14 @@ The folder is a simulated filesystem view provided by PRoot. It exists only for 
 
 ## How the simulated mount works
 
-`nas mount` starts a Python bridge and a Bash shell under patched PRoot. PRoot watches filesystem calls made by that shell and its child programs. The bridge creates local directory entries and sparse file placeholders so commands can navigate the NAS without storing file contents there:
+`nas mount` starts a Python bridge and a Bash shell under patched PRoot. PRoot watches filesystem calls made by that shell and its child programs. It binds a private temporary backing directory over `~/nas` inside the session. The bridge puts directory entries and sparse file placeholders in that private directory so commands can navigate the NAS without storing NAS file contents there. The ordinary `~/nas` path stays empty outside PRoot:
 
 ```text
   `cd`, `ls`, `find` ──▶ PRoot ──▶ Python bridge ──SMB──▶ NAS names and sizes
                                    │
-                                   └──▶ sparse placeholders at ~/nas
-                                        (no NAS file contents stored)
+                                   └──▶ sparse placeholders in private temp folder
+                                        │  (names and sizes, no NAS file contents)
+                                        └──▶ visible as ~/nas only inside PRoot
 
   `cat`, `read`    ──▶ PRoot ──▶ Python bridge ──SMB──▶ NAS file bytes
                          ◀──────── requested bytes in memory ◀────────┘
@@ -24,7 +25,7 @@ The folder is a simulated filesystem view provided by PRoot. It exists only for 
 
 For example, `cd ~/nas/Shared` works because the bridge creates the corresponding local directory before Android handles `chdir()`. `ls` sees names fetched from the NAS. A read fetches the bytes the command requests into memory; it does not fill the sparse placeholder with those bytes. `cat` still transfers an entire file over the network because it reads the entire file. `cat file > ~/local-copy` saves a copy because the output path is on the phone.
 
-Supported file writes go to SMB as the program makes them. Directory changes are synchronized with the server, and the bridge removes its placeholders when the session exits successfully. Programs may still create their own temporary files, and files you save elsewhere on the phone remain there. Other Termux paths are available in the same shell because PRoot runs with the existing Android filesystem as its root. No kernel mount or root access is involved, so a shell outside this PRoot session does not get the live NAS view.
+Supported file writes go to SMB as the program makes them. Directory changes are synchronized with the server, and the bridge removes its private placeholders when the session exits successfully. A newly created NAS file remains on the server, while its private placeholder disappears on exit. Programs may still create their own temporary files, and files you save elsewhere on the phone remain there. If a sync fails, the bridge prints a recovery folder path instead of deleting files it cannot account for. Other Termux paths are available in the same shell because PRoot runs with the existing Android filesystem as its root. No kernel mount or root access is involved, so a shell outside this PRoot session does not get the live NAS view.
 
 ## Install in Termux
 
@@ -151,7 +152,7 @@ exit
 
 Use your chosen folder instead of `~/nas` if you changed it. If you added a connection with `--share Shared`, start at `~/nas`; otherwise enter the share folder as shown. Copying files in either direction, editing files, `mkdir`, `mv` within one share, and `rm` are supported. Your other Termux and Android storage paths remain available in the session.
 
-In the default range mode, supported file writes are sent to SMB as they happen. Directory changes such as rename and delete are synchronized as commands make them. If SMB rejects an operation, the command reports an error. Check both the phone folder and the NAS after a failed operation or interrupted session before retrying.
+In the default range mode, supported file writes are sent to SMB as they happen. Directory changes such as rename and delete are synchronized as commands make them. If SMB rejects an operation, the command reports an error. Check the NAS and any recovery folder printed by the bridge after a failed operation or interrupted session before retrying.
 
 This is limited filesystem emulation. Symbolic links, hard links, ownership and permission changes, append mode (`>>`), and renaming across different shares are unsupported. Programs requiring `mmap`, vector I/O, `sendfile`, `splice`, or `fallocate` on a NAS file will fail rather than read placeholder bytes. The server applies your account's SMB permissions. Concurrent edits from other devices are not fully protected.
 
@@ -173,7 +174,7 @@ with open("huge.bin", "r+b", buffering=0) as file:
 PY
 ```
 
-The range mode keeps a **sparse placeholder** with the file's name and size. It holds no copy of the file's contents. PRoot routes each supported file read or write through the bridge to SMB:
+The range mode keeps a **sparse placeholder** with the file's name and size in a private temporary directory. PRoot binds that directory to `~/nas` only for the mounted session. The placeholder holds no copy of the file's contents. PRoot routes each supported file read or write through the bridge to SMB:
 
 ```text
   Program in `nas mount`                  Local phone          NAS server
@@ -183,7 +184,7 @@ The range mode keeps a **sparse placeholder** with the file's name and size. It 
   pwrite(fd, "edit", 500 GB - 4)        no data stored      ─▶ 4 bytes
 ```
 
-The same session still shows your normal Termux home and Android storage. A 500 GB file was tested on Android 17 with four-byte reads and writes near its end; the local placeholder occupied 4 KiB. The actual transfer depends on what the program does: reading or copying the entire file still transfers 500 GB, and a program that loads it all into memory may run out of memory. `vi` can edit ordinary files in this mode, but it is not a practical random-access editor for a 500 GB file.
+The same session still shows your normal Termux home and Android storage. A 500 GB file was tested on Android 17 with four-byte reads and writes near its end; the private local placeholder occupied 4 KiB. The actual transfer depends on what the program does: reading or copying the entire file still transfers 500 GB, and a program that loads it all into memory may run out of memory. `vi` can edit ordinary files in this mode, but it is not a practical random-access editor for a 500 GB file. Editors may also make their own swap or backup copies on the phone; the bridge cannot prevent that.
 
 Range mode handles ordinary `read`, `pread`, `write`, `pwrite`, seek, truncate, file creation, and common directory changes. It deliberately rejects operations without remote equivalents rather than reading placeholder zeros or changing only local metadata. It is still experimental; keep backups of important files. The `--range-io` flag remains accepted but is no longer needed.
 

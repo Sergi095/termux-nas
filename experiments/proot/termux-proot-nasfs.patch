@@ -36,10 +36,10 @@ index 7df1fa0..5188d5d 100644
  #endif /* EXTENSION_H */
 diff --git a/src/extension/nasfs/nasfs.c b/src/extension/nasfs/nasfs.c
 new file mode 100644
-index 0000000..daab351
+index 0000000..8ff2ac4
 --- /dev/null
 +++ b/src/extension/nasfs/nasfs.c
-@@ -0,0 +1,591 @@
+@@ -0,0 +1,599 @@
 +/* NAS filesystem hydration and command-boundary write-through for PRoot. */
 +#include <arpa/inet.h>
 +#include <errno.h>
@@ -86,10 +86,11 @@ index 0000000..daab351
 +
 +static int remote_fd_path(Tracee *tracee, int fd, char path[PATH_MAX])
 +{
-+    const char *mount = getenv("PROOT_NAS_MOUNT");
++    const char *mount = getenv("PROOT_NAS_BACKING");
 +    char proc_path[64];
 +    ssize_t length;
 +    size_t mount_length;
++    if (mount == NULL) mount = getenv("PROOT_NAS_MOUNT");
 +    if (mount == NULL || fd < 0) return 0;
 +    snprintf(proc_path, sizeof(proc_path), "/proc/%ld/fd/%d", (long) tracee->pid, fd);
 +    length = readlink(proc_path, path, PATH_MAX - 1);
@@ -623,6 +624,13 @@ index 0000000..daab351
 +        action = 'O';
 +    else
 +        action = 'M';
++    if (getenv("PROOT_NAS_BACKING") != NULL) {
++        const char *backing = getenv("PROOT_NAS_BACKING");
++        char translated[PATH_MAX];
++        length = snprintf(translated, sizeof(translated), "%s%s", backing, path + strlen(mount));
++        if (length < 0 || (size_t) length >= sizeof(translated)) return -ENAMETOOLONG;
++        memcpy(path, translated, (size_t) length + 1);
++    }
 +    length = hydrate(path, action);
 +    if (length < 0) return length;
 +    if (stream_enabled() && sysnum == PR_truncate)

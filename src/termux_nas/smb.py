@@ -49,6 +49,7 @@ class SMBBackend:
         self._session_kwargs = {"username": user, "password": password, "port": port}
         self._missing_statuses = {
             NtStatus.STATUS_NO_SUCH_FILE,
+            NtStatus.STATUS_NOT_FOUND,
             NtStatus.STATUS_OBJECT_NAME_NOT_FOUND,
             NtStatus.STATUS_OBJECT_PATH_NOT_FOUND,
         }
@@ -58,10 +59,13 @@ class SMBBackend:
         return self._root + ("\\" + path.replace("/", "\\") if path else "")
 
     def _stat(self, path: str):
+        from smbprotocol.exceptions import SMBResponseException
+
         try:
             return self._client.stat(self._unc(path), **self._session_kwargs)
-        except OSError as error:
-            if getattr(error, "ntstatus", None) in self._missing_statuses:
+        except (OSError, SMBResponseException) as error:
+            status = error.status if isinstance(error, SMBResponseException) else getattr(error, "ntstatus", None)
+            if status in self._missing_statuses or getattr(error, "errno", None) == errno.ENOENT:
                 raise FileNotFoundError(path) from error
             raise
 

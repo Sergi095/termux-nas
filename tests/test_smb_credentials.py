@@ -1,16 +1,34 @@
 import io
+import errno
 import stat
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from smbprotocol.exceptions import SMBOSError
+from smbprotocol.exceptions import ObjectNameNotFound, SMBOSError
 from smbprotocol.header import NtStatus
 
 from termux_nas.smb import SMBBackend
 
 
 class SmbCredentialsTests(unittest.TestCase):
+    def test_missing_dfs_metadata_probes_are_file_not_found(self):
+        client = Mock()
+        errors = {
+            ".git": SMBOSError(NtStatus.STATUS_NOT_FOUND, ".git"),
+            ".hg": OSError(errno.ENOENT, "No such file or directory"),
+            ".svn": ObjectNameNotFound(),
+        }
+        def missing_stat(path, **kwargs):
+            raise errors[path.rsplit("\\", 1)[-1]]
+
+        client.stat.side_effect = missing_stat
+        with patch("termux_nas.smb._smbclient_module", return_value=client):
+            backend = SMBBackend("files.example.org", "shares", "user@example.org", "test-password")
+            for name in errors:
+                with self.subTest(name=name), self.assertRaises(FileNotFoundError):
+                    backend.is_dir(name)
+
     def test_restricted_dfs_child_does_not_abort_parent_scan(self):
         client = Mock()
         allowed = Mock(name="Allowed")

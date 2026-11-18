@@ -44,19 +44,22 @@ class SMBBackend:
         self._user = user
         self._password = password
         self._port = port
+        # smbclient can follow a DFS referral to another server. Pass these
+        # credentials on every call so the referred server can authenticate.
+        self._session_kwargs = {"username": user, "password": password, "port": port}
         self._missing_statuses = {
             NtStatus.STATUS_NO_SUCH_FILE,
             NtStatus.STATUS_OBJECT_NAME_NOT_FOUND,
             NtStatus.STATUS_OBJECT_PATH_NOT_FOUND,
         }
-        self._client.register_session(host, username=user, password=password, port=port)
+        self._client.register_session(host, **self._session_kwargs)
 
     def _unc(self, path: str) -> str:
         return self._root + ("\\" + path.replace("/", "\\") if path else "")
 
     def _stat(self, path: str):
         try:
-            return self._client.stat(self._unc(path), port=self._port)
+            return self._client.stat(self._unc(path), **self._session_kwargs)
         except OSError as error:
             if getattr(error, "ntstatus", None) in self._missing_statuses:
                 raise FileNotFoundError(path) from error
@@ -73,11 +76,11 @@ class SMBBackend:
         return details.st_size, details.st_mtime_ns
 
     def listdir(self, path: str) -> list[str]:
-        return sorted(self._client.listdir(self._unc(path), port=self._port), key=str.casefold)
+        return sorted(self._client.listdir(self._unc(path), **self._session_kwargs), key=str.casefold)
 
     def entries(self, path: str) -> list[dict]:
         result = []
-        for entry in self._client.scandir(self._unc(path), port=self._port):
+        for entry in self._client.scandir(self._unc(path), **self._session_kwargs):
             if entry.is_symlink():
                 continue
             info = getattr(entry, "smb_info", None)
@@ -101,15 +104,15 @@ class SMBBackend:
         return sorted(result, key=lambda item: item["name"].casefold())
 
     def read(self, path: str) -> BinaryIO:
-        return self._client.open_file(self._unc(path), mode="rb", port=self._port)
+        return self._client.open_file(self._unc(path), mode="rb", **self._session_kwargs)
 
     def read_range(self, path: str, offset: int, size: int) -> bytes:
-        with self._client.open_file(self._unc(path), mode="rb", buffering=0, port=self._port) as source:
+        with self._client.open_file(self._unc(path), mode="rb", buffering=0, **self._session_kwargs) as source:
             source.seek(offset)
             return source.read(size)
 
     def write_range(self, path: str, offset: int, data: bytes) -> int:
-        with self._client.open_file(self._unc(path), mode="r+b", buffering=0, port=self._port) as target:
+        with self._client.open_file(self._unc(path), mode="r+b", buffering=0, **self._session_kwargs) as target:
             target.seek(offset)
             written = 0
             while written < len(data):
@@ -121,32 +124,32 @@ class SMBBackend:
             return written
 
     def create_file(self, path: str) -> None:
-        with self._client.open_file(self._unc(path), mode="xb", buffering=0, port=self._port):
+        with self._client.open_file(self._unc(path), mode="xb", buffering=0, **self._session_kwargs):
             pass
 
     def truncate(self, path: str, size: int) -> None:
-        with self._client.open_file(self._unc(path), mode="r+b", buffering=0, port=self._port) as target:
+        with self._client.open_file(self._unc(path), mode="r+b", buffering=0, **self._session_kwargs) as target:
             target.truncate(size)
 
     def write(self, path: str) -> BinaryIO:
-        return self._client.open_file(self._unc(path), mode="xb", port=self._port)
+        return self._client.open_file(self._unc(path), mode="xb", **self._session_kwargs)
 
     def upload(self, path: str, source: BinaryIO, overwrite: bool) -> None:
         mode = "r+b" if overwrite else "xb"
-        with self._client.open_file(self._unc(path), mode=mode, port=self._port) as output:
+        with self._client.open_file(self._unc(path), mode=mode, **self._session_kwargs) as output:
             if overwrite:
                 output.seek(0)
                 output.truncate(0)
             shutil.copyfileobj(source, output)
 
     def mkdir(self, path: str) -> None:
-        self._client.mkdir(self._unc(path), port=self._port)
+        self._client.mkdir(self._unc(path), **self._session_kwargs)
 
     def remove(self, path: str) -> None:
-        self._client.remove(self._unc(path), port=self._port)
+        self._client.remove(self._unc(path), **self._session_kwargs)
 
     def rmdir(self, path: str) -> None:
-        self._client.rmdir(self._unc(path), port=self._port)
+        self._client.rmdir(self._unc(path), **self._session_kwargs)
 
     def rename(self, source: str, destination: str) -> None:
         connection = _rpc_connection(self._host, self._user, self._password, self._port)

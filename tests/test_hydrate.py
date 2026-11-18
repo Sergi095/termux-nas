@@ -2,11 +2,12 @@ import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from termux_nas.hydrate import Hydrator
+from termux_nas.hydrate import HydrationServer, Hydrator
 
 
 class FakeBackend:
@@ -33,6 +34,17 @@ class FakeBackend:
 
 
 class HydratorTests(unittest.TestCase):
+    def test_repeated_authentication_error_is_logged_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            output = io.StringIO()
+            with HydrationServer(str(Path(temporary) / "nas.sock"), Hydrator(mount, FakeBackend())) as server:
+                with redirect_stderr(output):
+                    server.report_error("filesystem bridge", RuntimeError("SpnegoError (1): (16)"))
+                    server.report_error("filesystem bridge", RuntimeError("SpnegoError (1): (16)"))
+            self.assertEqual(output.getvalue().count("SpnegoError (1): (16)"), 1)
+
     def test_created_share_directory_remains_writable_with_restrictive_umask(self):
         with tempfile.TemporaryDirectory() as temporary:
             mount = Path(temporary) / "mount"

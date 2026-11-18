@@ -454,7 +454,7 @@ class HydrationHandler(socketserver.BaseRequestHandler):
                                                  struct.unpack("!I", raw_flags)[0])
                 self.request.sendall(b"0")
             except Exception as error:
-                print(f"nas-mount: remote open failed: {error}", file=sys.stderr)
+                self.server.report_error("remote open", error)
                 self.request.sendall(b"2")
             return
         if action == b"T":
@@ -466,7 +466,7 @@ class HydrationHandler(socketserver.BaseRequestHandler):
                                                     struct.unpack("!Q", raw_size)[0])
                 self.request.sendall(b"0")
             except Exception as error:
-                print(f"nas-mount: remote truncate failed: {error}", file=sys.stderr)
+                self.server.report_error("remote truncate", error)
                 self.request.sendall(b"2")
             return
         if action in (b"D", b"U"):
@@ -488,7 +488,7 @@ class HydrationHandler(socketserver.BaseRequestHandler):
                     written = self.server.hydrator.write_range(raw_path.decode("utf-8"), offset, data)
                     self.request.sendall(b"0" + struct.pack("!I", written))
             except Exception as error:
-                print(f"nas-mount: remote I/O failed: {error}", file=sys.stderr)
+                self.server.report_error("remote I/O", error)
                 self.request.sendall(b"2")
             return
         try:
@@ -497,7 +497,7 @@ class HydrationHandler(socketserver.BaseRequestHandler):
         except FileNotFoundError:
             self.request.sendall(b"1")
         except Exception as error:
-            print(f"nas-mount: filesystem bridge error: {error}", file=sys.stderr)
+            self.server.report_error("filesystem bridge", error)
             self.request.sendall(b"2")
 
     def _read_exact(self, count: int) -> bytes | None:
@@ -515,7 +515,17 @@ class HydrationServer(socketserver.ThreadingUnixStreamServer):
 
     def __init__(self, socket_path: str, hydrator: Hydrator):
         self.hydrator = hydrator
+        self._error_lock = threading.Lock()
+        self._reported_errors: set[str] = set()
         super().__init__(socket_path, HydrationHandler)
+
+    def report_error(self, operation: str, error: Exception) -> None:
+        message = f"nas-mount: {operation} error: {type(error).__name__}: {error}"
+        with self._error_lock:
+            if message in self._reported_errors:
+                return
+            self._reported_errors.add(message)
+        print(message, file=sys.stderr)
 
 
 def request_sync(socket_path: str) -> None:

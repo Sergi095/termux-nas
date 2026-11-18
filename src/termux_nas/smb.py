@@ -164,6 +164,9 @@ class SMBAllSharesBackend:
         if not self._shares:
             raise ValueError(f"No accessible file shares found on {host}; specify --share if discovery is disabled")
 
+    def write_probe_roots(self) -> list[str]:
+        return list(self._shares)
+
     def _select(self, path: str) -> tuple[SMBBackend, str]:
         share, _, child = path.partition("/")
         backend = self._shares.get(share)

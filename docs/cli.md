@@ -39,6 +39,8 @@ nas mount mynas --at ~/temporary-nas  # Override for one session
 
 The folder must be empty and cannot be a symbolic link. `nas mount` creates a missing folder if its parent exists. A folder created by `nas mount` is removed when the session ends successfully; a folder you created remains. An SMB sync failure leaves unsynced local files in the folder for recovery.
 
+With all-shares mode, create files inside `FOLDER/SHARE`, not at the server's share-listing root `FOLDER`. The mount command checks local write access to each discovered share folder before starting Bash.
+
 ## What `mount` does
 
 Inside the `nas mount` Bash session, normal commands such as `cd`, `ls`, `find`, `cat`, `cp`, and editors see the NAS folder alongside Termux home, `$PREFIX`, and Android storage. Common writes sync to SMB after each interactive command and when the session exits. Exiting closes this process-scoped view. A separate, already-running Termux shell does not see a live NAS folder.

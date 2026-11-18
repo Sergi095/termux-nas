@@ -60,9 +60,14 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
     else:
         mount.mkdir(mode=0o700)
         created_mount = True
+        try:
+            mount.chmod(0o700)
+        except OSError:
+            pass
     original_mode = stat.S_IMODE(mount.stat().st_mode)
 
     with tempfile.TemporaryDirectory(prefix="termux-nas-mount-") as temporary:
+        Path(temporary).chmod(0o700)
         socket_path = Path(temporary) / "nas.sock"
         marker = Path(temporary) / "nas.dirty"
         rcfile = Path(temporary) / "bashrc"
@@ -99,17 +104,22 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                     )
                     if write_check.returncode == 0 or stat.S_IMODE(mount.stat().st_mode) != original_mode:
                         raise ValueError("Patched PRoot lacks the metadata guard; rebuild it with the latest patch")
-                    probe = mount / f".nas-write-probe-{os.getpid()}"
-                    try:
-                        write_probe = subprocess.run(
-                            [str(proot), "-r", "/", bash, "-c", 'printf x > "$1"', "bash", str(probe)],
-                            env=environment, cwd=home, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE, text=True,
-                        )
-                        if write_probe.returncode or not probe.is_file() or not marker.exists():
-                            raise ValueError("Patched PRoot does not support NAS writes; run bash install.sh")
-                    finally:
-                        probe.unlink(missing_ok=True)
+                    probe_roots = [mount]
+                    if hasattr(backend, "write_probe_roots"):
+                        probe_roots.extend(mount / name for name in backend.write_probe_roots())
+                    for root in probe_roots:
+                        probe = root / f".nas-write-probe-{os.getpid()}"
+                        try:
+                            write_probe = subprocess.run(
+                                [str(proot), "-r", "/", bash, "-c", 'printf x > "$1"', "bash", str(probe)],
+                                env=environment, cwd=home, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True,
+                            )
+                            if write_probe.returncode or not probe.is_file() or not marker.exists():
+                                detail = write_probe.stderr.strip()
+                                raise ValueError(f"PRoot cannot write to NAS folder {root}: {detail or 'write probe failed'}")
+                        finally:
+                            probe.unlink(missing_ok=True)
                     hydrator.sync()
                     if command is None:
                         print(f"NAS is available at {mount}. Changes sync after each command and on exit.")

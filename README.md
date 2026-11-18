@@ -91,6 +91,8 @@ cd ~/other-folder
 
 For one session without changing the saved path, use `nas mount home --at ~/other-folder`. Paths may be relative, absolute, or start with `~`. If the folder does not exist, its parent must already exist; `nas mount` creates the folder and removes it on exit. If you created an empty folder first, the folder remains after exit. A folder containing files is refused so its contents are never replaced. `nas-mount home --at ~/other-folder` is an alias for `nas mount home --at ~/other-folder`.
 
+`nas mount` checks that the local folder and each discovered share folder accept writes before opening the shell. If it reports that a folder cannot be written, choose an empty folder under your Termux home and retry with `--at` or `nas set-mount`.
+
 ## Use the NAS folder
 
 While the `nas mount` Bash session is open:

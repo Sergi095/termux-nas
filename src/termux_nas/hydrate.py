@@ -41,6 +41,14 @@ class Hydrator:
         self.dirty = False
         self.lock = threading.RLock()
 
+    @staticmethod
+    def _allow_cache_write(path: Path, directory: bool = False) -> None:
+        try:
+            path.chmod(0o700 if directory else 0o600)
+        except OSError:
+            # Some Android shared-storage providers do not support chmod.
+            pass
+
     def _remember(self, relative: str, path: Path, directory: bool, replace: bool = False) -> None:
         if relative in self.remote and not replace:
             return
@@ -52,8 +60,9 @@ class Hydrator:
         if directory == self.mount or directory.is_dir():
             return
         self._mkdir(directory.parent)
-        directory.mkdir()
+        directory.mkdir(mode=0o700)
         self.created.add(directory)
+        self._allow_cache_write(directory, directory=True)
 
     def cleanup(self) -> None:
         """Remove bridge-owned cache entries without deleting other folder contents."""
@@ -225,6 +234,7 @@ class Hydrator:
                         with child.open("xb") as output:
                             output.truncate(entry["size"])
                         self.created.add(child)
+                        self._allow_cache_write(child)
                     self._remember(child_relative, child, child_is_dir)
                 self.listed_until[relative] = time.monotonic() + self.metadata_ttl
                 return
@@ -240,6 +250,7 @@ class Hydrator:
                     with os.fdopen(descriptor, "wb") as output, self.backend.read(relative) as source:
                         shutil.copyfileobj(source, output)
                     os.replace(temporary, absolute)
+                    self._allow_cache_write(absolute)
                     self.hydrated.add(relative)
                     self.created.add(absolute)
                     self._remember(relative, absolute, False, replace=True)
@@ -255,6 +266,7 @@ class Hydrator:
                 with absolute.open("xb") as output:
                     output.truncate(self.backend.stat_size(relative))
                 self.created.add(absolute)
+                self._allow_cache_write(absolute)
                 self._remember(relative, absolute, False)
 
 

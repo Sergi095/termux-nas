@@ -35,6 +35,38 @@ class FakeBackend:
 
 class MountedShellTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
+    def test_all_shares_folder_is_writable(self):
+        class AllSharesBackend:
+            def __init__(self):
+                self.uploads = {}
+
+            def write_probe_roots(self):
+                return ["Shared"]
+
+            def is_dir(self, path):
+                if path in ("", "Shared"):
+                    return True
+                raise FileNotFoundError(path)
+
+            def entries(self, path):
+                if path == "":
+                    return [{"name": "Shared", "mode": "drwxr-xr-x", "size": 0}]
+                return []
+
+            def upload(self, path, source, overwrite):
+                self.uploads[path] = source.read()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = AllSharesBackend()
+            with patch.dict(os.environ, {"HOME": temporary}):
+                status = run_mounted_shell(
+                    backend, "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                    [shutil.which("bash"), "-c", 'cd "$HOME/nas/Shared" && printf test > file.txt'],
+                )
+            self.assertEqual(status, 0)
+            self.assertEqual(backend.uploads["Shared/file.txt"], b"test")
+
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
     def test_normal_commands_read_local_and_remote_and_upload(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)

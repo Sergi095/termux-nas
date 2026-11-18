@@ -31,6 +31,19 @@ class FakeBackend:
 
 
 class HydratorTests(unittest.TestCase):
+    def test_created_share_directory_remains_writable_with_restrictive_umask(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            hydrator = Hydrator(mount, FakeBackend())
+            old_umask = os.umask(0o222)
+            try:
+                hydrator.ensure(str(mount), "M")
+            finally:
+                os.umask(old_umask)
+            self.assertTrue(os.access(mount / "Photos", os.W_OK | os.X_OK))
+            self.assertTrue(os.access(mount / "hello.txt", os.W_OK))
+
     def test_directory_then_file_read(self):
         with tempfile.TemporaryDirectory() as temporary:
             mount = Path(temporary) / "mount"

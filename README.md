@@ -38,22 +38,24 @@ Writes take the return trip: `vi` or `cp` changes the local backing file, then t
 
 ## Install in Termux
 
-Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://play.google.com/store/apps/details?id=com.termux). Open Termux and run these commands, regardless of which source you used:
+Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://play.google.com/store/apps/details?id=com.termux). This repository is private, so your GitHub account must have access to it. Open Termux and run:
 
 ```sh
-pkg install -y git
+pkg install -y git gh
+gh auth login
+gh auth setup-git
 mkdir -p ~/repos
-git clone https://github.com/Sergi095/termux-nas.git ~/repos/termux-nas
+gh repo clone Sergi095/termux-nas ~/repos/termux-nas
 cd ~/repos/termux-nas
 bash install.sh
 nas --help
 ```
 
-The repository is public, so cloning does not require a GitHub login. The installer adds `nas` and `nas-mount` to Termux, installs Python dependencies, builds the patched PRoot binary, and checks that PRoot can start a Termux command. The first install can take a few minutes; later runs reuse the PRoot build. You do not need root, a separate PRoot checkout, or an Android add-on APK.
+`gh auth login` signs into GitHub in Termux; `gh auth setup-git` lets later `git pull` commands use that login. The installer adds `nas` and `nas-mount` to Termux, installs Python dependencies, builds the patched PRoot binary, and checks that PRoot can start a Termux command. The first install can take a few minutes; later runs reuse the PRoot build. You do not need root, a separate PRoot checkout, or an Android add-on APK.
 
 Google Play Termux uses its app-provided executable PRoot loader when present. F-Droid and GitHub builds use the loader bundled in the patched PRoot. Termux APKs from these sources have different signatures; see [Termux's installation notes](https://github.com/termux/termux-app#installation) before switching the Termux app itself between sources.
 
-If you already have the repository, update the installed package with:
+If you already have the repository, make sure GitHub is authenticated in Termux (`gh auth login` and `gh auth setup-git`), then update the installed package with:
 
 ```sh
 cd ~/repos/termux-nas
@@ -153,6 +155,12 @@ Changes become visible on the NAS after the command finishes and the Bash prompt
 This is limited write-through emulation. A command may finish locally before an SMB error is reported at the prompt. Symbolic links, hard links, ownership and permission changes, and renaming across different shares are unsupported. The local folder does not mirror SMB access control checks before each write; the server applies your account's permissions when the change syncs. Changed remote files are checked before overwriting, but concurrent renames and deletes are not fully protected.
 
 Directory listings are reused for two seconds to reduce SMB requests. Opened files are cached until you exit, so a file changed on the NAS by another device may need a new `nas mount` session before you see the change. PRoot adds overhead to filesystem operations, so this shell is slower than ordinary Termux.
+
+### Large files
+
+Listing a file does not download its contents, but opening an existing NAS file currently downloads the **entire file** into the local backing folder. Editing a 500 GB file would require roughly that much free phone storage and a full download. Saving it uploads the **entire file** again. An interrupted upload can leave the remote file incomplete because the current uploader truncates it before copying the new contents. Do not use this version to edit files that are too large to fit locally or that you cannot safely restore.
+
+Supporting small edits to huge files would require a different bridge that reads and writes byte ranges on demand. A program that itself reads or rewrites the whole file would still transfer the whole file, even with such a bridge.
 
 ## Remove the package
 

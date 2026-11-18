@@ -4,6 +4,7 @@ The cache is a private backing directory for traced processes, not a mount.
 SMB changes are synchronized when a command finishes and when the shell exits.
 """
 
+import errno
 import os
 import shutil
 import socket
@@ -26,11 +27,16 @@ class RemoteEntry:
 
 
 class Hydrator:
-    def __init__(self, mount: Path, backend, metadata_ttl: float = 2.0, marker: Path | None = None):
+    def __init__(self, mount: Path, backend, metadata_ttl: float = 2.0, marker: Path | None = None,
+                 max_download_bytes: int = 256 * 1024 * 1024,
+                 free_space_reserve: int = 512 * 1024 * 1024):
         self.mount = mount
         self.backend = backend
         self.metadata_ttl = metadata_ttl
         self.marker = marker
+        self.max_download_bytes = max_download_bytes
+        self.free_space_reserve = free_space_reserve
+        self.downloaded_bytes = 0
         self.hydrated: set[str] = set()
         self.kinds: dict[str, bool] = {}
         self.listed_until: dict[str, float] = {}
@@ -247,14 +253,32 @@ class Hydrator:
                 return
             self._mkdir(absolute.parent)
             if action in ("O", "W", "R") and relative not in self.hydrated:
+                size = self.backend.stat_size(relative)
+                remaining = self.max_download_bytes - self.downloaded_bytes
+                if size > remaining:
+                    raise OSError(errno.EFBIG,
+                                  f"NAS file {relative} is too large for the "
+                                  f"{self.max_download_bytes // (1024 * 1024)} MiB session download limit")
+                if shutil.disk_usage(absolute.parent).free < size + self.free_space_reserve:
+                    raise OSError(errno.ENOSPC,
+                                  f"NAS file {relative} would leave less than "
+                                  f"{self.free_space_reserve // (1024 * 1024)} MiB free")
                 visible_stat = absolute.stat() if absolute.exists() else None
                 descriptor, temporary = tempfile.mkstemp(prefix=".nas-", dir=absolute.parent)
                 try:
+                    copied = 0
                     with os.fdopen(descriptor, "wb") as output, self.backend.read(relative) as source:
-                        shutil.copyfileobj(source, output)
+                        while chunk := source.read(1024 * 1024):
+                            if len(chunk) > remaining - copied:
+                                raise OSError(errno.EFBIG, f"NAS file {relative} exceeded the session download limit")
+                            if shutil.disk_usage(absolute.parent).free < len(chunk) + self.free_space_reserve:
+                                raise OSError(errno.ENOSPC, f"NAS file {relative} would exhaust phone storage")
+                            output.write(chunk)
+                            copied += len(chunk)
                     if visible_stat is not None:
                         os.utime(temporary, ns=(visible_stat.st_atime_ns, visible_stat.st_mtime_ns))
                     os.replace(temporary, absolute)
+                    self.downloaded_bytes += copied
                     self._allow_cache_write(absolute)
                     self.hydrated.add(relative)
                     self.created.add(absolute)

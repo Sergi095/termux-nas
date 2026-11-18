@@ -48,3 +48,5 @@ Inside the `nas mount` Bash session, normal commands such as `cd`, `ls`, `find`,
 The server applies your SMB account permissions during sync. File edits with normal `vi`, shell redirection, copy, `mkdir`, rename within a share, and delete are supported. Symbolic links, ownership or permission changes, and rename across shares are unsupported. See [Use the NAS folder](../README.md#use-the-nas-folder) for examples and limitations.
 
 `--proot PATH` selects a custom patched PRoot binary for development. Normal installs need no `--proot` option.
+
+`TERMUX_NAS_MAX_DOWNLOAD_MB` sets the maximum total number of MiB downloaded into the local backing folder during one mount session. The default is `256`; the bridge also keeps at least 512 MiB free before each download. This limit does not apply to new files or temporary files created by programs in the session.

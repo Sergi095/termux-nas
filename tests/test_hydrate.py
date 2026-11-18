@@ -3,6 +3,8 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from termux_nas.hydrate import Hydrator
 
@@ -57,6 +59,49 @@ class HydratorTests(unittest.TestCase):
             hydrator.ensure(str(mount / "hello.txt"), "O")
             self.assertEqual((mount / "hello.txt").read_bytes(), b"content")
             self.assertEqual(backend.reads, ["hello.txt"])
+
+    def test_large_remote_file_is_rejected_before_download(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            backend = FakeBackend()
+            hydrator = Hydrator(mount, backend, max_download_bytes=6, free_space_reserve=0)
+            hydrator.ensure(str(mount), "M")
+            with self.assertRaisesRegex(OSError, "session download limit"):
+                hydrator.ensure(str(mount / "hello.txt"), "O")
+            self.assertEqual(backend.reads, [])
+            self.assertEqual(hydrator.downloaded_bytes, 0)
+
+    def test_download_respects_remaining_phone_space(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            backend = FakeBackend()
+            hydrator = Hydrator(mount, backend, max_download_bytes=100,
+                                free_space_reserve=20)
+            hydrator.ensure(str(mount), "M")
+            with patch("termux_nas.hydrate.shutil.disk_usage",
+                       return_value=SimpleNamespace(free=26)):
+                with self.assertRaisesRegex(OSError, "leave less than"):
+                    hydrator.ensure(str(mount / "hello.txt"), "O")
+            self.assertEqual(backend.reads, [])
+
+    def test_download_stops_if_remote_file_exceeds_reported_size(self):
+        class GrowingBackend(FakeBackend):
+            def read(self, path):
+                self.reads.append(path)
+                return io.BytesIO(b"content is longer than reported")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            backend = GrowingBackend()
+            hydrator = Hydrator(mount, backend, max_download_bytes=8, free_space_reserve=0)
+            hydrator.ensure(str(mount), "M")
+            with self.assertRaisesRegex(OSError, "session download limit"):
+                hydrator.ensure(str(mount / "hello.txt"), "O")
+            self.assertEqual(hydrator.downloaded_bytes, 0)
+            self.assertFalse(any(mount.glob(".nas-*")))
 
     def test_file_timestamp_stays_stable_during_hydration(self):
         class TimestampBackend(FakeBackend):

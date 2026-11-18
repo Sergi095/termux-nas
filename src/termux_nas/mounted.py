@@ -48,6 +48,13 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
     bash = shutil.which("bash")
     if bash is None:
         raise ValueError("bash is required for nas-mount")
+    limit_text = os.environ.get("TERMUX_NAS_MAX_DOWNLOAD_MB", "256")
+    try:
+        limit_mb = int(limit_text)
+        if limit_mb < 1:
+            raise ValueError
+    except ValueError as error:
+        raise ValueError("TERMUX_NAS_MAX_DOWNLOAD_MB must be a positive whole number") from error
     home = Path.home()
     chosen = os.path.expanduser(mount_path) if mount_path else str(home / mount_name)
     mount = Path(os.path.abspath(chosen))
@@ -77,7 +84,8 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
             'PROMPT_COMMAND="_nas_sync_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}"\n',
             encoding="utf-8",
         )
-        hydrator = Hydrator(mount, backend, marker=marker)
+        hydrator = Hydrator(mount, backend, marker=marker,
+                            max_download_bytes=limit_mb * 1024 * 1024)
         preserve_cache = False
         try:
             with HydrationServer(str(socket_path), hydrator) as server:
@@ -122,7 +130,8 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                             probe.unlink(missing_ok=True)
                     hydrator.sync()
                     if command is None:
-                        print(f"NAS is available at {mount}. Changes sync after each command and on exit.")
+                        print(f"NAS is available at {mount}. Changes sync after each command and on exit. "
+                              f"Downloads are limited to {limit_mb} MiB per session.")
                     shell_status = subprocess.call(
                         [str(proot), "-r", "/", *(command or [bash, "--rcfile", str(rcfile), "-i"])],
                         env=environment, cwd=home,

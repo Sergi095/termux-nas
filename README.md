@@ -158,7 +158,9 @@ Directory listings are reused for two seconds to reduce SMB requests. Opened fil
 
 ### Large files
 
-Listing a file does not download its contents, but opening an existing NAS file currently downloads the **entire file** into the local backing folder. Editing a 500 GB file would require roughly that much free phone storage and a full download. Saving it uploads the **entire file** again. An interrupted upload can leave the remote file incomplete because the current uploader truncates it before copying the new contents. Do not use this version to edit files that are too large to fit locally or that you cannot safely restore.
+Listing a file does not download its contents, but opening an existing NAS file currently downloads the **entire file** into the local backing folder. To protect phone storage, the bridge limits NAS downloads to **256 MiB total per session** and refuses a download that would leave less than **512 MiB free** on the backing filesystem. A 500 GB file can be listed, but opening it fails before its contents are downloaded. You can explicitly raise the session limit with `TERMUX_NAS_MAX_DOWNLOAD_MB=512 nas mount home` if your device has room.
+
+The download limit does not cap files that programs create locally, including editor swap files. Saving an existing file still uploads the **entire file** again. An interrupted upload can leave the remote file incomplete because the current uploader truncates it before copying the new contents. Do not use this version to edit files that are too large to fit locally or that you cannot safely restore.
 
 Supporting small edits to huge files would require a different bridge that reads and writes byte ranges on demand. A program that itself reads or rewrites the whole file would still transfer the whole file, even with such a bridge.
 

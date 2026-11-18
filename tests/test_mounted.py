@@ -35,6 +35,42 @@ class FakeBackend:
 
 class MountedShellTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
+    def test_huge_file_is_not_downloaded(self):
+        class HugeBackend(FakeBackend):
+            def __init__(self):
+                super().__init__()
+                self.reads = []
+
+            def is_dir(self, path):
+                if path == "huge.bin":
+                    return False
+                if path == "":
+                    return True
+                raise FileNotFoundError(path)
+
+            def entries(self, path):
+                return [{"name": "huge.bin", "mode": "-rw-r--r--", "size": 500 * 1024**3}]
+
+            def stat_size(self, path):
+                if path == "huge.bin":
+                    return 500 * 1024**3
+                raise FileNotFoundError(path)
+
+            def read(self, path):
+                self.reads.append(path)
+                return io.BytesIO(b"")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = HugeBackend()
+            with patch.dict(os.environ, {"HOME": temporary}):
+                status = run_mounted_shell(
+                    backend, "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                    [shutil.which("bash"), "-c", 'cat "$HOME/nas/huge.bin" >/dev/null'],
+                )
+            self.assertNotEqual(status, 0)
+            self.assertEqual(backend.reads, [])
+
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
     def test_all_shares_folder_is_writable(self):
         class AllSharesBackend:
             def __init__(self):

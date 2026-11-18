@@ -4,6 +4,38 @@
 
 The folder is a simulated filesystem view provided by PRoot. It exists only for commands started inside the `nas mount` session. Exiting the session disconnects it; an already-running ordinary Termux shell cannot see the live NAS folder. Common file changes are sent to SMB after each interactive shell command and again when the session exits.
 
+## How the simulated mount works
+
+`nas mount` starts a Python bridge and a Bash shell under patched PRoot. PRoot watches filesystem calls made by that shell and its child programs. For paths under the chosen NAS folder, it pauses the call while the bridge prepares a real local backing folder:
+
+```text
+  Command touches ~/nas (cd, ls, cat, vi, cp)
+                    │
+                    ▼
+          Patched PRoot path hook
+          pauses the filesystem call
+                    │ private Unix socket
+                    ▼
+             Python NAS bridge ◀──── SMB ────▶ NAS server
+                    │
+                    │ creates directories or downloads an opened file
+                    ▼
+          Local backing folder at ~/nas
+                    │
+                    ▼
+          Original filesystem call continues
+                    │
+                    ▼
+          Android handles it like a normal local path
+
+  After an edit: local file ──▶ bridge ── SMB ──▶ NAS server
+                 (at the next prompt or when the session exits)
+```
+
+For example, `cd ~/nas/Shared` works because the bridge creates the corresponding local directory before Android handles `chdir()`. `ls` sees names fetched from the NAS. Opening a file downloads its contents when needed; listing a directory does not download every file in it.
+
+Writes take the return trip: `vi` or `cp` changes the local backing file, then the bridge uploads that change over SMB when the interactive prompt returns or the session exits. Other Termux paths are available in the same shell because PRoot runs with the existing Android filesystem as its root. No kernel mount or root access is involved, so a shell outside this PRoot session does not get the live NAS view.
+
 ## Install in Termux
 
 Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://play.google.com/store/apps/details?id=com.termux). Open Termux and run these commands, regardless of which source you used:

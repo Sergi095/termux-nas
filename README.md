@@ -45,7 +45,7 @@ To check the CLI and patched PRoot locally without a NAS, run `bash ~/repos/term
 | --- | --- | --- |
 | Google Play `googleplay.2026.10.09` | Android 17, aarch64 phone | Installer, PRoot loader, live SMB share listing, and `cd ~/nas` confirmed by a user. |
 | F-Droid `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, local fixture reads and writes. |
-| GitHub `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, local fixture reads and writes. |
+| GitHub `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, shell writes, and normal `vi` edits of new and existing files against local fixtures. |
 
 These checks cover the named versions and architectures. The live Google Play test confirmed browsing; write operations have been checked against a local SMB2 server and emulator fixtures.
 
@@ -105,6 +105,7 @@ cat Photos/notes.txt
 cp Photos/picture.jpg ~/storage/downloads/picture.jpg
 mkdir NewFolder
 cp ~/local.txt NewFolder/file.txt
+vi NewFolder/file.txt
 printf 'hello\n' > NewFolder/hello.txt
 mv NewFolder/hello.txt NewFolder/renamed.txt
 rm NewFolder/renamed.txt

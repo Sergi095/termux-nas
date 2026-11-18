@@ -66,6 +66,54 @@ class MountedShellTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertEqual(backend.uploads["Shared/file.txt"], b"test")
 
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT") and shutil.which("vi"),
+                         "set TERMUX_NAS_TEST_PROOT and install vi to run the editor integration test")
+    def test_normal_vi_can_create_file_without_stale_swap(self):
+        class AllSharesBackend:
+            def __init__(self):
+                self.uploads = {}
+
+            def write_probe_roots(self):
+                return ["Shared"]
+
+            def is_dir(self, path):
+                if path in ("", "Shared"):
+                    return True
+                raise FileNotFoundError(path)
+
+            def entries(self, path):
+                if path == "":
+                    return [{"name": "Shared", "mode": "drwxr-xr-x", "size": 0}]
+                return [{"name": "existing.txt", "mode": "-rw-r--r--", "size": 4}]
+
+            def stat_size(self, path):
+                if path == "Shared/existing.txt":
+                    return 4
+                raise FileNotFoundError(path)
+
+            def read(self, path):
+                if path == "Shared/existing.txt":
+                    return io.BytesIO(b"old\n")
+                raise FileNotFoundError(path)
+
+            def upload(self, path, source, overwrite):
+                self.uploads[path] = source.read()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = AllSharesBackend()
+            script = ('cd "$HOME/nas/Shared" && '
+                      'vi -Nu NONE -es new.txt -c "normal! ihello" -c wq && '
+                      'vi -Nu NONE -es existing.txt -c "normal! ggInew " -c wq')
+            with patch.dict(os.environ, {"HOME": temporary}):
+                status = run_mounted_shell(
+                    backend, "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                    [shutil.which("bash"), "-c", script],
+                )
+            self.assertEqual(status, 0)
+            self.assertEqual(backend.uploads["Shared/new.txt"], b"hello\n")
+            self.assertEqual(backend.uploads["Shared/existing.txt"], b"new old\n")
+            self.assertFalse(any(name.endswith((".swp", ".swo", ".swx")) for name in backend.uploads))
+
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"), "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
     def test_normal_commands_read_local_and_remote_and_upload(self):
         with tempfile.TemporaryDirectory() as temporary:

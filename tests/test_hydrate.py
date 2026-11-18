@@ -58,6 +58,21 @@ class HydratorTests(unittest.TestCase):
             self.assertEqual((mount / "hello.txt").read_bytes(), b"content")
             self.assertEqual(backend.reads, ["hello.txt"])
 
+    def test_file_timestamp_stays_stable_during_hydration(self):
+        class TimestampBackend(FakeBackend):
+            def entries(self, path):
+                return [{"name": "hello.txt", "mode": "-rw-r--r--", "size": 7,
+                         "mtime": 1_700_000_000}]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            hydrator = Hydrator(mount, TimestampBackend())
+            hydrator.ensure(str(mount), "M")
+            original_mtime = (mount / "hello.txt").stat().st_mtime_ns
+            hydrator.ensure(str(mount / "hello.txt"), "O")
+            self.assertEqual((mount / "hello.txt").stat().st_mtime_ns, original_mtime)
+
     def test_repeated_directory_checks_use_cached_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             mount = Path(temporary) / "mount"
@@ -97,6 +112,31 @@ class HydratorTests(unittest.TestCase):
             hydrator.ensure(str(mount / "new-dir"), "P")
             (mount / "new-dir").mkdir()
             hydrator.ensure(str(mount / "new-dir"), "M")
+
+    def test_deleted_local_temporary_file_is_not_recreated(self):
+        class MissingFileBackend(FakeBackend):
+            def is_dir(self, path):
+                if path == ".edit.swp":
+                    raise FileNotFoundError(path)
+                return super().is_dir(path)
+
+            def stat_size(self, path):
+                if path == ".edit.swp":
+                    raise FileNotFoundError(path)
+                return super().stat_size(path)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary) / "mount"
+            mount.mkdir()
+            hydrator = Hydrator(mount, MissingFileBackend())
+            swap = mount / ".edit.swp"
+            hydrator.ensure(str(swap), "W")
+            swap.touch()
+            hydrator.ensure(str(swap), "P")
+            swap.unlink()
+            with self.assertRaises(FileNotFoundError):
+                hydrator.ensure(str(swap), "M")
+            self.assertFalse(swap.exists())
 
     def test_external_change_prevents_overwrite(self):
         class ConflictBackend(FakeBackend):

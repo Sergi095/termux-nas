@@ -45,6 +45,6 @@ With all-shares mode, create files inside `FOLDER/SHARE`, not at the server's sh
 
 Inside the `nas mount` Bash session, normal commands such as `cd`, `ls`, `find`, `cat`, `cp`, and editors see the NAS folder alongside Termux home, `$PREFIX`, and Android storage. Common writes sync to SMB after each interactive command and when the session exits. Exiting closes this process-scoped view. A separate, already-running Termux shell does not see a live NAS folder.
 
-The server applies your SMB account permissions during sync. File edits, copy, `mkdir`, rename within a share, and delete are supported. Symbolic links, ownership or permission changes, and rename across shares are unsupported. See [Use the NAS folder](../README.md#use-the-nas-folder) for examples and limitations.
+The server applies your SMB account permissions during sync. File edits with normal `vi`, shell redirection, copy, `mkdir`, rename within a share, and delete are supported. Symbolic links, ownership or permission changes, and rename across shares are unsupported. See [Use the NAS folder](../README.md#use-the-nas-folder) for examples and limitations.
 
 `--proot PATH` selects a custom patched PRoot binary for development. Normal installs need no `--proot` option.

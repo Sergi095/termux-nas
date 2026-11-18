@@ -233,6 +233,8 @@ class Hydrator:
                     elif not child.exists():
                         with child.open("xb") as output:
                             output.truncate(entry["size"])
+                        if entry.get("mtime") is not None:
+                            os.utime(child, (entry["mtime"], entry["mtime"]))
                         self.created.add(child)
                         self._allow_cache_write(child)
                     self._remember(child_relative, child, child_is_dir)
@@ -245,10 +247,13 @@ class Hydrator:
                 return
             self._mkdir(absolute.parent)
             if action in ("O", "W", "R") and relative not in self.hydrated:
+                visible_stat = absolute.stat() if absolute.exists() else None
                 descriptor, temporary = tempfile.mkstemp(prefix=".nas-", dir=absolute.parent)
                 try:
                     with os.fdopen(descriptor, "wb") as output, self.backend.read(relative) as source:
                         shutil.copyfileobj(source, output)
+                    if visible_stat is not None:
+                        os.utime(temporary, ns=(visible_stat.st_atime_ns, visible_stat.st_mtime_ns))
                     os.replace(temporary, absolute)
                     self._allow_cache_write(absolute)
                     self.hydrated.add(relative)
@@ -263,8 +268,13 @@ class Hydrator:
                     if os.path.exists(temporary):
                         os.unlink(temporary)
             elif not absolute.exists():
+                # Check the server before creating a placeholder.  A deleted
+                # local temporary file can still have a cached kind here;
+                # opening it first would resurrect it as an empty file when
+                # the server reports that it does not exist.
+                size = self.backend.stat_size(relative)
                 with absolute.open("xb") as output:
-                    output.truncate(self.backend.stat_size(relative))
+                    output.truncate(size)
                 self.created.add(absolute)
                 self._allow_cache_write(absolute)
                 self._remember(relative, absolute, False)

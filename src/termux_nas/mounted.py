@@ -27,11 +27,13 @@ def _patched_proot(explicit: str | None) -> Path:
     raise ValueError("Run bash install.sh to install the patched PRoot, or pass --proot PATH")
 
 
-def _environment(mount: Path, socket_path: Path, marker: Path) -> dict[str, str]:
+def _environment(mount: Path, socket_path: Path, marker: Path, streaming: bool = False) -> dict[str, str]:
     environment = os.environ.copy()
     environment["PROOT_NAS_MOUNT"] = str(mount)
     environment["PROOT_NAS_SOCKET"] = str(socket_path)
     environment["PROOT_NAS_DIRTY_MARKER"] = str(marker)
+    if streaming:
+        environment["PROOT_NAS_STREAM"] = "1"
     prefix = environment.get("PREFIX")
     if prefix:
         app_loader = Path(prefix).parent / "applib" / "libproot-loader.so"
@@ -41,7 +43,8 @@ def _environment(mount: Path, socket_path: Path, marker: Path) -> dict[str, str]
 
 
 def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
-                      command: list[str] | None = None, mount_path: str | None = None) -> int:
+                      command: list[str] | None = None, mount_path: str | None = None,
+                      streaming: bool = False) -> int:
     """Show a NAS tree at an empty folder for processes launched by patched PRoot."""
     validate_mount_name(mount_name)
     proot = _patched_proot(proot_path)
@@ -85,14 +88,15 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
             encoding="utf-8",
         )
         hydrator = Hydrator(mount, backend, marker=marker,
-                            max_download_bytes=limit_mb * 1024 * 1024)
+                            max_download_bytes=limit_mb * 1024 * 1024,
+                            streaming=streaming)
         preserve_cache = False
         try:
             with HydrationServer(str(socket_path), hydrator) as server:
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 try:
-                    environment = _environment(mount, socket_path, marker)
+                    environment = _environment(mount, socket_path, marker, streaming)
                     # Unsupported metadata writes must remain blocked by PRoot.
                     ls = shutil.which("ls")
                     chmod = shutil.which("chmod")
@@ -112,8 +116,8 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                     )
                     if write_check.returncode == 0 or stat.S_IMODE(mount.stat().st_mode) != original_mode:
                         raise ValueError("Patched PRoot lacks the metadata guard; rebuild it with the latest patch")
-                    probe_roots = [mount]
-                    if hasattr(backend, "write_probe_roots"):
+                    probe_roots = [] if streaming else [mount]
+                    if probe_roots and hasattr(backend, "write_probe_roots"):
                         probe_roots.extend(mount / name for name in backend.write_probe_roots())
                     for root in probe_roots:
                         probe = root / f".nas-write-probe-{os.getpid()}"
@@ -130,8 +134,11 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                             probe.unlink(missing_ok=True)
                     hydrator.sync()
                     if command is None:
-                        print(f"NAS is available at {mount}. Changes sync after each command and on exit. "
-                              f"Downloads are limited to {limit_mb} MiB per session.")
+                        if streaming:
+                            print(f"Experimental remote range I/O at {mount}. Files are read and written over SMB on demand.")
+                        else:
+                            print(f"NAS is available at {mount}. Changes sync after each command and on exit. "
+                                  f"Downloads are limited to {limit_mb} MiB per session.")
                     shell_status = subprocess.call(
                         [str(proot), "-r", "/", *(command or [bash, "--rcfile", str(rcfile), "-i"])],
                         env=environment, cwd=home,

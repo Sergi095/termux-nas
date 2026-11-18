@@ -36,10 +36,10 @@ index 7df1fa0..5188d5d 100644
  #endif /* EXTENSION_H */
 diff --git a/src/extension/nasfs/nasfs.c b/src/extension/nasfs/nasfs.c
 new file mode 100644
-index 0000000..29e0012
+index 0000000..4fcab12
 --- /dev/null
 +++ b/src/extension/nasfs/nasfs.c
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,591 @@
 +/* NAS filesystem hydration and command-boundary write-through for PRoot. */
 +#include <arpa/inet.h>
 +#include <errno.h>
@@ -52,10 +52,262 @@ index 0000000..29e0012
 +#include <sys/socket.h>
 +#include <sys/un.h>
 +#include <unistd.h>
++#include <talloc.h>
 +
 +#include "extension/extension.h"
 +#include "syscall/sysnum.h"
 +#include "tracee/mem.h"
++
++#define NAS_RANGE_CHUNK (1024 * 1024)
++static int full_write(int fd, const void *buffer, size_t size);
++
++typedef struct {
++    uint32_t pending_write;
++    int pending_write_active;
++} NasState;
++
++static int full_read(int fd, void *buffer, size_t size)
++{
++    char *data = buffer;
++    while (size > 0) {
++        ssize_t count = read(fd, data, size);
++        if (count <= 0) return -1;
++        data += count;
++        size -= count;
++    }
++    return 0;
++}
++
++static int stream_enabled(void)
++{
++    const char *value = getenv("PROOT_NAS_STREAM");
++    return value != NULL && strcmp(value, "1") == 0;
++}
++
++static int remote_fd_path(Tracee *tracee, int fd, char path[PATH_MAX])
++{
++    const char *mount = getenv("PROOT_NAS_MOUNT");
++    char proc_path[64];
++    ssize_t length;
++    size_t mount_length;
++    if (mount == NULL || fd < 0) return 0;
++    snprintf(proc_path, sizeof(proc_path), "/proc/%ld/fd/%d", (long) tracee->pid, fd);
++    length = readlink(proc_path, path, PATH_MAX - 1);
++    if (length < 0) return 0;
++    path[length] = '\0';
++    mount_length = strlen(mount);
++    return strncmp(path, mount, mount_length) == 0 &&
++           (path[mount_length] == '/' || path[mount_length] == '\0');
++}
++
++static int is_remote_fd(Tracee *tracee, int fd)
++{
++    char path[PATH_MAX];
++    return remote_fd_path(tracee, fd, path);
++}
++
++static int unsupported_remote_io(Tracee *tracee, Sysnum call)
++{
++    int first = (int) peek_reg(tracee, ORIGINAL, SYSARG_1);
++    int second = (int) peek_reg(tracee, ORIGINAL, SYSARG_2);
++    int third = (int) peek_reg(tracee, ORIGINAL, SYSARG_3);
++    switch (call) {
++    case PR_mmap: case PR_mmap2:
++        return is_remote_fd(tracee, (int) peek_reg(tracee, ORIGINAL, SYSARG_5));
++    case PR_sendfile: case PR_sendfile64:
++        return is_remote_fd(tracee, first) || is_remote_fd(tracee, second);
++    case PR_splice: case PR_copy_file_range:
++        return is_remote_fd(tracee, first) || is_remote_fd(tracee, third);
++    case PR_readv: case PR_writev: case PR_preadv: case PR_pwritev:
++    case PR_fallocate:
++        return is_remote_fd(tracee, first);
++    case PR_fchmod: case PR_fchown: case PR_fchown32:
++    case PR_futimesat:
++        return is_remote_fd(tracee, first);
++    case PR_fsetxattr: case PR_fremovexattr:
++        return is_remote_fd(tracee, first);
++    default:
++        return 0;
++    }
++}
++
++static int fd_position(Tracee *tracee, int fd, uint64_t *position)
++{
++    char proc_path[64];
++    char line[128];
++    unsigned long long value;
++    FILE *input;
++    snprintf(proc_path, sizeof(proc_path), "/proc/%ld/fdinfo/%d", (long) tracee->pid, fd);
++    input = fopen(proc_path, "r");
++    if (input == NULL) return -1;
++    while (fgets(line, sizeof(line), input) != NULL) {
++        if (sscanf(line, "pos:\t%llu", &value) == 1) {
++            fclose(input);
++            *position = value;
++            return 0;
++        }
++    }
++    fclose(input);
++    return -1;
++}
++
++static int read_range(const char *path, uint64_t offset, uint32_t requested,
++                      unsigned char *buffer, uint32_t *received)
++{
++    const char *socket_path = getenv("PROOT_NAS_SOCKET");
++    struct sockaddr_un address;
++    unsigned char header[17];
++    uint32_t path_length = (uint32_t) strlen(path);
++    uint32_t size;
++    uint32_t network;
++    int fd;
++    int index;
++    if (socket_path == NULL || strlen(socket_path) >= sizeof(address.sun_path) ||
++        requested > NAS_RANGE_CHUNK) return -EIO;
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) return -EIO;
++    memset(&address, 0, sizeof(address));
++    address.sun_family = AF_UNIX;
++    strcpy(address.sun_path, socket_path);
++    if (connect(fd, (struct sockaddr *) &address, sizeof(address)) < 0) goto failed;
++    header[0] = 'D';
++    network = htonl(path_length);
++    memcpy(header + 1, &network, 4);
++    for (index = 0; index < 8; index++)
++        header[5 + index] = (unsigned char) (offset >> (56 - 8 * index));
++    network = htonl(requested);
++    memcpy(header + 13, &network, 4);
++    if (full_write(fd, header, 5) < 0 || full_write(fd, path, path_length) < 0 ||
++        full_write(fd, header + 5, 12) < 0 ||
++        full_read(fd, header, 1) < 0 || header[0] != '0' ||
++        full_read(fd, &network, 4) < 0) goto failed;
++    size = ntohl(network);
++    if (size > requested || full_read(fd, buffer, size) < 0) goto failed;
++    close(fd);
++    *received = size;
++    return 0;
++failed:
++    close(fd);
++    return -EIO;
++}
++
++static int write_range(const char *path, uint64_t offset, const unsigned char *data,
++                       uint32_t requested, uint32_t *written)
++{
++    const char *socket_path = getenv("PROOT_NAS_SOCKET");
++    struct sockaddr_un address;
++    unsigned char header[17];
++    uint32_t path_length = (uint32_t) strlen(path);
++    uint32_t network;
++    int fd;
++    int index;
++    if (socket_path == NULL || strlen(socket_path) >= sizeof(address.sun_path) ||
++        requested > NAS_RANGE_CHUNK) return -EIO;
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) return -EIO;
++    memset(&address, 0, sizeof(address));
++    address.sun_family = AF_UNIX;
++    strcpy(address.sun_path, socket_path);
++    if (connect(fd, (struct sockaddr *) &address, sizeof(address)) < 0) goto failed;
++    header[0] = 'U';
++    network = htonl(path_length);
++    memcpy(header + 1, &network, 4);
++    for (index = 0; index < 8; index++)
++        header[5 + index] = (unsigned char) (offset >> (56 - 8 * index));
++    network = htonl(requested);
++    memcpy(header + 13, &network, 4);
++    if (full_write(fd, header, 5) < 0 || full_write(fd, path, path_length) < 0 ||
++        full_write(fd, header + 5, 12) < 0 ||
++        full_write(fd, data, requested) < 0 ||
++        full_read(fd, header, 1) < 0 || header[0] != '0' ||
++        full_read(fd, &network, 4) < 0) goto failed;
++    *written = ntohl(network);
++    close(fd);
++    return *written <= requested ? 0 : -EIO;
++failed:
++    close(fd);
++    return -EIO;
++}
++
++static int commit_open(const char *path, uint32_t flags)
++{
++    const char *socket_path = getenv("PROOT_NAS_SOCKET");
++    struct sockaddr_un address;
++    uint32_t network;
++    uint32_t path_length = (uint32_t) strlen(path);
++    char reply;
++    int fd;
++    if (socket_path == NULL || strlen(socket_path) >= sizeof(address.sun_path)) return -EIO;
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) return -EIO;
++    memset(&address, 0, sizeof(address));
++    address.sun_family = AF_UNIX;
++    strcpy(address.sun_path, socket_path);
++    if (connect(fd, (struct sockaddr *) &address, sizeof(address)) < 0) goto failed;
++    network = htonl(path_length);
++    if (full_write(fd, "F", 1) < 0 || full_write(fd, &network, 4) < 0 ||
++        full_write(fd, path, path_length) < 0) goto failed;
++    network = htonl(flags);
++    if (full_write(fd, &network, 4) < 0 || full_read(fd, &reply, 1) < 0) goto failed;
++    close(fd);
++    return reply == '0' ? 0 : -EIO;
++failed:
++    close(fd);
++    return -EIO;
++}
++
++static int sync_now(void)
++{
++    const char *socket_path = getenv("PROOT_NAS_SOCKET");
++    struct sockaddr_un address;
++    const char request[5] = { 'S', 0, 0, 0, 0 };
++    char reply;
++    int fd;
++    if (socket_path == NULL || strlen(socket_path) >= sizeof(address.sun_path)) return -EIO;
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) return -EIO;
++    memset(&address, 0, sizeof(address));
++    address.sun_family = AF_UNIX;
++    strcpy(address.sun_path, socket_path);
++    if (connect(fd, (struct sockaddr *) &address, sizeof(address)) < 0 ||
++        full_write(fd, request, sizeof(request)) < 0 ||
++        full_read(fd, &reply, 1) < 0) {
++        close(fd);
++        return -EIO;
++    }
++    close(fd);
++    return reply == '0' ? 0 : -EIO;
++}
++
++static int truncate_range(const char *path, uint64_t size)
++{
++    const char *socket_path = getenv("PROOT_NAS_SOCKET");
++    struct sockaddr_un address;
++    unsigned char bytes[8];
++    uint32_t network;
++    uint32_t path_length = (uint32_t) strlen(path);
++    char reply;
++    int fd;
++    int index;
++    if (socket_path == NULL || strlen(socket_path) >= sizeof(address.sun_path)) return -EIO;
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) return -EIO;
++    memset(&address, 0, sizeof(address));
++    address.sun_family = AF_UNIX;
++    strcpy(address.sun_path, socket_path);
++    if (connect(fd, (struct sockaddr *) &address, sizeof(address)) < 0) goto failed;
++    network = htonl(path_length);
++    for (index = 0; index < 8; index++)
++        bytes[index] = (unsigned char) (size >> (56 - 8 * index));
++    if (full_write(fd, "T", 1) < 0 || full_write(fd, &network, 4) < 0 ||
++        full_write(fd, path, path_length) < 0 || full_write(fd, bytes, 8) < 0 ||
++        full_read(fd, &reply, 1) < 0) goto failed;
++    close(fd);
++    return reply == '0' ? 0 : -EIO;
++failed:
++    close(fd);
++    return -EIO;
++}
 +
 +static int full_write(int fd, const void *buffer, size_t size)
 +{
@@ -132,6 +384,22 @@ index 0000000..29e0012
 +           (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0;
 +}
 +
++static uint64_t get_open_flags(Tracee *tracee, Sysnum sysnum)
++{
++    uint64_t flags;
++    if (sysnum == PR_creat) return O_WRONLY | O_CREAT | O_TRUNC;
++    if (sysnum == PR_open)
++        flags = peek_reg(tracee, ORIGINAL, SYSARG_2);
++    else if (sysnum == PR_openat)
++        flags = peek_reg(tracee, ORIGINAL, SYSARG_3);
++    else if (sysnum == PR_openat2) {
++        if (read_data(tracee, &flags, peek_reg(tracee, ORIGINAL, SYSARG_3),
++                      sizeof(flags)) < 0) return 0;
++    }
++    else return 0;
++    return flags;
++}
++
 +static int is_supported_mutation(Sysnum sysnum)
 +{
 +    switch (sysnum) {
@@ -139,6 +407,7 @@ index 0000000..29e0012
 +    case PR_unlink: case PR_unlinkat: case PR_rmdir:
 +    case PR_rename: case PR_renameat: case PR_renameat2:
 +    case PR_truncate: case PR_utime: case PR_utimes: case PR_utimensat:
++    case PR_futimesat:
 +        return 1;
 +    default:
 +        return 0;
@@ -152,8 +421,6 @@ index 0000000..29e0012
 +    case PR_link: case PR_linkat: case PR_symlink: case PR_symlinkat:
 +    case PR_chmod: case PR_fchmodat: case PR_fchmodat2:
 +    case PR_chown: case PR_lchown: case PR_fchownat:
-+    case PR_setxattr: case PR_lsetxattr: case PR_removexattr:
-+    case PR_lremovexattr:
 +        return 1;
 +    default:
 +        return 0;
@@ -169,7 +436,159 @@ index 0000000..29e0012
 +    Sysnum sysnum;
 +    char action;
 +    int length;
-+    if (event == INHERIT_PARENT) return 0;
++    if (event == INITIALIZATION) {
++        static FilteredSysnum filtered[] = {
++            { PR_read, FILTER_SYSEXIT },
++            { PR_pread64, FILTER_SYSEXIT },
++            { PR_write, FILTER_SYSEXIT },
++            { PR_pwrite64, FILTER_SYSEXIT },
++            { PR_open, FILTER_SYSEXIT }, { PR_openat, FILTER_SYSEXIT },
++            { PR_openat2, FILTER_SYSEXIT }, { PR_creat, FILTER_SYSEXIT },
++            { PR_mkdir, FILTER_SYSEXIT }, { PR_mkdirat, FILTER_SYSEXIT },
++            { PR_unlink, FILTER_SYSEXIT }, { PR_unlinkat, FILTER_SYSEXIT },
++            { PR_rmdir, FILTER_SYSEXIT },
++            { PR_rename, FILTER_SYSEXIT }, { PR_renameat, FILTER_SYSEXIT },
++            { PR_renameat2, FILTER_SYSEXIT },
++            { PR_readv, 0 }, { PR_writev, 0 },
++            { PR_preadv, 0 }, { PR_pwritev, 0 },
++            { PR_mmap, 0 }, { PR_mmap2, 0 },
++            { PR_sendfile, 0 }, { PR_sendfile64, 0 },
++            { PR_splice, 0 }, { PR_copy_file_range, 0 },
++            { PR_ftruncate, 0 }, { PR_fallocate, 0 },
++            { PR_fchmod, 0 }, { PR_fchown, 0 }, { PR_fchown32, 0 },
++            { PR_futimesat, 0 },
++            { PR_fsetxattr, 0 }, { PR_fremovexattr, 0 },
++            FILTERED_SYSNUM_END,
++        };
++        extension->config = talloc_zero(extension, NasState);
++        if (extension->config == NULL) return -ENOMEM;
++        extension->filtered_sysnums = filtered;
++        return 0;
++    }
++    if (event == INHERIT_PARENT) return 1;
++    if (event == INHERIT_CHILD) {
++        extension->config = talloc_zero(extension, NasState);
++        return extension->config == NULL ? -ENOMEM : 0;
++    }
++    if (stream_enabled() && event == SYSCALL_ENTER_START) {
++        Tracee *tracee = TRACEE(extension);
++        if (unsupported_remote_io(tracee, get_sysnum(tracee, ORIGINAL)))
++            return -EOPNOTSUPP;
++        return 0;
++    }
++    if (stream_enabled() && event == SYSCALL_ENTER_END) {
++        Tracee *tracee = TRACEE(extension);
++        Sysnum call = get_sysnum(tracee, ORIGINAL);
++        if (call == PR_ftruncate) {
++            char fd_path[PATH_MAX];
++            int fd = (int) peek_reg(tracee, ORIGINAL, SYSARG_1);
++            if (remote_fd_path(tracee, fd, fd_path))
++                return truncate_range(fd_path, peek_reg(tracee, ORIGINAL, SYSARG_2));
++            return 0;
++        }
++        if (call == PR_write || call == PR_pwrite64) {
++            int fd = (int) peek_reg(tracee, ORIGINAL, SYSARG_1);
++            word_t count = peek_reg(tracee, ORIGINAL, SYSARG_3);
++            char fd_path[PATH_MAX];
++            unsigned char *data;
++            uint64_t offset;
++            uint32_t written = 0;
++            int status;
++            NasState *state;
++            if (!remote_fd_path(tracee, fd, fd_path)) return 0;
++            if (count > NAS_RANGE_CHUNK) count = NAS_RANGE_CHUNK;
++            if (call == PR_pwrite64)
++                offset = peek_reg(tracee, ORIGINAL, SYSARG_4);
++            else if (fd_position(tracee, fd, &offset) < 0) return -EIO;
++            data = malloc(count ? count : 1);
++            if (data == NULL) return -ENOMEM;
++            status = read_data(tracee, data, peek_reg(tracee, ORIGINAL, SYSARG_2), count);
++            if (status == 0)
++                status = write_range(fd_path, offset, data, count, &written);
++            free(data);
++            if (status < 0) return status;
++            if (call == PR_pwrite64) {
++                set_sysnum(tracee, PR_void);
++                poke_reg(tracee, SYSARG_RESULT, written);
++            } else {
++                state = (NasState *) extension->config;
++                state->pending_write = written;
++                state->pending_write_active = 1;
++                set_sysnum(tracee, PR_lseek);
++                poke_reg(tracee, SYSARG_1, fd);
++                poke_reg(tracee, SYSARG_2, written);
++                poke_reg(tracee, SYSARG_3, SEEK_CUR);
++                tracee->restart_how = PTRACE_SYSCALL;
++            }
++            return 0;
++        }
++        if (call == PR_read || call == PR_pread64) {
++            char fd_path[PATH_MAX];
++            if (remote_fd_path(tracee, (int) peek_reg(tracee, ORIGINAL, SYSARG_1), fd_path) &&
++                peek_reg(tracee, CURRENT, SYSARG_3) > NAS_RANGE_CHUNK)
++                poke_reg(tracee, SYSARG_3, NAS_RANGE_CHUNK);
++        }
++        return 0;
++    }
++    if (stream_enabled() && event == SYSCALL_EXIT_END) {
++        Tracee *tracee = TRACEE(extension);
++        Sysnum call = get_sysnum(tracee, ORIGINAL);
++        if (call == PR_mkdir || call == PR_mkdirat || call == PR_unlink ||
++            call == PR_unlinkat || call == PR_rmdir || call == PR_rename ||
++            call == PR_renameat || call == PR_renameat2) {
++            if ((long) peek_reg(tracee, CURRENT, SYSARG_RESULT) >= 0)
++                return sync_now();
++            return 0;
++        }
++        if (call == PR_open || call == PR_openat || call == PR_openat2 || call == PR_creat) {
++            long result = (long) peek_reg(tracee, CURRENT, SYSARG_RESULT);
++            char fd_path[PATH_MAX];
++            uint64_t flags = get_open_flags(tracee, call);
++            if (result >= 0 && (flags & (O_CREAT | O_TRUNC)) &&
++                remote_fd_path(tracee, result, fd_path)) {
++                int status = commit_open(fd_path, (uint32_t) flags);
++                if (status < 0) return status;
++            }
++            return 0;
++        }
++        if (call == PR_write) {
++            NasState *state = (NasState *) extension->config;
++            if (state->pending_write_active) {
++                uint32_t written = state->pending_write;
++                state->pending_write = 0;
++                state->pending_write_active = 0;
++                if ((long) peek_reg(tracee, CURRENT, SYSARG_RESULT) < 0) return -EIO;
++                poke_reg(tracee, SYSARG_RESULT, written);
++            }
++            return 0;
++        }
++        if (call == PR_read || call == PR_pread64) {
++            int fd = (int) peek_reg(tracee, ORIGINAL, SYSARG_1);
++            word_t result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
++            char fd_path[PATH_MAX];
++            unsigned char *data;
++            uint64_t offset;
++            uint32_t received;
++            int status;
++            if ((long) result <= 0 || result > NAS_RANGE_CHUNK ||
++                !remote_fd_path(tracee, fd, fd_path)) return 0;
++            if (call == PR_pread64)
++                offset = peek_reg(tracee, ORIGINAL, SYSARG_4);
++            else {
++                if (fd_position(tracee, fd, &offset) < 0 || offset < result) return -EIO;
++                offset -= result;
++            }
++            data = malloc(result);
++            if (data == NULL) return -ENOMEM;
++            status = read_range(fd_path, offset, result, data, &received);
++            if (status == 0)
++                status = write_data(tracee, peek_reg(tracee, ORIGINAL, SYSARG_2), data, received);
++            free(data);
++            if (status < 0) return status;
++            poke_reg(tracee, SYSARG_RESULT, received);
++        }
++        return 0;
++    }
 +    if (event != GUEST_PATH) return 0;
 +
 +    mount = getenv("PROOT_NAS_MOUNT");
@@ -183,6 +602,13 @@ index 0000000..29e0012
 +        (path[strlen(mount)] != '/' && path[strlen(mount)] != '\0'))
 +        return 0;
 +    sysnum = get_sysnum(TRACEE(extension), ORIGINAL);
++    if (stream_enabled() && (get_open_flags(TRACEE(extension), sysnum) & O_APPEND))
++        return -EOPNOTSUPP;
++    if (stream_enabled() && (sysnum == PR_utime || sysnum == PR_utimes ||
++        sysnum == PR_utimensat || sysnum == PR_futimesat)) return -EOPNOTSUPP;
++    if (sysnum == PR_setxattr || sysnum == PR_lsetxattr ||
++        sysnum == PR_removexattr || sysnum == PR_lremovexattr)
++        return -EOPNOTSUPP;
 +    if (is_unsupported_mutation(sysnum))
 +        return -EROFS;
 +    if (is_write_open(TRACEE(extension), sysnum) || sysnum == PR_truncate ||
@@ -199,6 +625,8 @@ index 0000000..29e0012
 +        action = 'M';
 +    length = hydrate(path, action);
 +    if (length < 0) return length;
++    if (stream_enabled() && sysnum == PR_truncate)
++        return truncate_range(path, peek_reg(TRACEE(extension), ORIGINAL, SYSARG_2));
 +    if (action == 'W' || action == 'P' || action == 'R')
 +        return mark_dirty();
 +    return 0;

@@ -1,6 +1,6 @@
 # termux-nas
 
-`termux-nas` is a rootless Termux package for browsing an SMB NAS with ordinary commands. It provides `nas` and `nas-mount` commands. Run `nas mount` to open a Bash session where the NAS appears as a folder alongside your normal Termux files, commands, and Android storage.
+`termux-nas` is a rootless Termux package for browsing an SMB NAS with ordinary commands. It provides `nas` and `nas-mount` commands. Run `nas mount` to open a Bash session where the NAS appears as a folder alongside your normal Termux files, commands, and Android storage. Add `--range-io` for experimental remote reads and writes that do not download entire files.
 
 The folder is a simulated filesystem view provided by PRoot. It exists only for commands started inside the `nas mount` session. Exiting the session disconnects it; an already-running ordinary Termux shell cannot see the live NAS folder. Common file changes are sent to SMB after each interactive shell command and again when the session exits.
 
@@ -79,7 +79,7 @@ To check the CLI and patched PRoot locally without a NAS, run `bash ~/repos/term
 | --- | --- | --- |
 | Google Play `googleplay.2026.10.09` | Android 17, aarch64 phone | Installer, PRoot loader, live SMB share listing, and `cd ~/nas` confirmed by a user. |
 | F-Droid `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, local fixture reads and writes. |
-| GitHub `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, shell writes, and normal `vi` edits of new and existing files against local fixtures. |
+| GitHub `0.118.3` | Android 17, x86_64 emulator | Installer, bundled PRoot loader, shell writes, normal `vi` edits, and experimental range I/O against fixtures and a real SMB2 test share. |
 
 These checks cover the named versions and architectures. The live Google Play test confirmed browsing; write operations have been checked against a local SMB2 server and emulator fixtures.
 
@@ -158,11 +158,39 @@ Directory listings are reused for two seconds to reduce SMB requests. Opened fil
 
 ### Large files
 
-Listing a file does not download its contents, but opening an existing NAS file currently downloads the **entire file** into the local backing folder. To protect phone storage, the bridge limits NAS downloads to **256 MiB total per session** and refuses a download that would leave less than **512 MiB free** on the backing filesystem. A 500 GB file can be listed, but opening it fails before its contents are downloaded. You can explicitly raise the session limit with `TERMUX_NAS_MAX_DOWNLOAD_MB=512 nas mount home` if your device has room.
+In the default mode, listing a file does not download its contents, but opening an existing NAS file downloads the **entire file** into the local backing folder. To protect phone storage, the bridge limits NAS downloads to **256 MiB total per session** and refuses a download that would leave less than **512 MiB free** on the backing filesystem. A 500 GB file can be listed, but opening it fails before its contents are downloaded. You can explicitly raise the session limit with `TERMUX_NAS_MAX_DOWNLOAD_MB=512 nas mount home` if your device has room.
 
 The download limit does not cap files that programs create locally, including editor swap files. Saving an existing file still uploads the **entire file** again. An interrupted upload can leave the remote file incomplete because the current uploader truncates it before copying the new contents. Do not use this version to edit files that are too large to fit locally or that you cannot safely restore.
 
-Supporting small edits to huge files would require a different bridge that reads and writes byte ranges on demand. A program that itself reads or rewrites the whole file would still transfer the whole file, even with such a bridge.
+### Experimental remote range I/O
+
+To read or change part of a huge file without downloading it, start the mount with `--range-io`:
+
+```sh
+nas mount home --range-io
+cd ~/nas/Shared             # Or cd ~/nas if you selected one share
+python - <<'PY'
+import os
+with open("huge.bin", "r+b", buffering=0) as file:
+    offset = 500 * 1024**3 - 4
+    print(os.pread(file.fileno(), 4, offset))
+    os.pwrite(file.fileno(), b"edit", offset)
+PY
+```
+
+The range mode keeps a **sparse placeholder** with the file's name and size. It holds no copy of the file's contents. PRoot routes each supported file read or write through the bridge to SMB:
+
+```text
+  Program in `nas mount --range-io`       Local phone          NAS server
+  ──────────────────────────────────────────────────────────────────────
+  stat("huge.bin")                      sparse name + size  ◀─ metadata
+  pread(fd, 4, 500 GB - 4)             no data stored      ◀─ 4 bytes
+  pwrite(fd, "edit", 500 GB - 4)        no data stored      ─▶ 4 bytes
+```
+
+The same session still shows your normal Termux home and Android storage. A 500 GB file was tested on Android 17 with four-byte reads and writes near its end; the local placeholder occupied 4 KiB. The actual transfer depends on what the program does: reading or copying the entire file still transfers 500 GB, and a program that loads it all into memory may run out of memory. `vi` can edit ordinary files in this mode, but it is not a practical random-access editor for a 500 GB file.
+
+Range mode currently handles ordinary `read`, `pread`, `write`, `pwrite`, seek, truncate, file creation, and common directory changes. It deliberately rejects `mmap`, vector I/O, `sendfile`, `splice`, `fallocate`, and permission or ownership changes on NAS files because those calls do not yet have remote equivalents. Programs that require those calls will fail rather than read placeholder zeros or change only local metadata. Writes are sent to SMB as the program makes them; the server applies your account's permissions. The view is still limited to the PRoot session, and PRoot and SMB add latency to file operations. Treat `--range-io` as experimental and keep backups of important files.
 
 ## Remove the package
 

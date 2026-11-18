@@ -27,6 +27,8 @@ def parser() -> argparse.ArgumentParser:
     mount.add_argument("name", nargs="?")
     mount.add_argument("--at", metavar="FOLDER", help="Use this empty folder as the NAS path for this session")
     mount.add_argument("--proot", help="Path to the patched PRoot binary")
+    mount.add_argument("--range-io", action="store_true",
+                       help="Experimental remote byte-range reads and writes without full-file downloads")
     remove = sub.add_parser("remove", help="Forget a saved NAS connection")
     remove.add_argument("name")
     return p
@@ -109,7 +111,8 @@ def main(argv: list[str] | None = None) -> int:
 
             mount_path = args.at if args.at is not None else item.get("mount_path")
             return run_mounted_shell(backend, str(item.get("mount_name", "nas")), args.proot,
-                                     mount_path=str(mount_path) if mount_path is not None else None)
+                                     mount_path=str(mount_path) if mount_path is not None else None,
+                                     streaming=args.range_io)
         return 0
     except (OSError, ValueError, KeyError, ImportError) as error:
         print(f"nas: {error}", file=sys.stderr)

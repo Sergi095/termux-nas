@@ -29,7 +29,8 @@ class RemoteEntry:
 class Hydrator:
     def __init__(self, mount: Path, backend, metadata_ttl: float = 2.0, marker: Path | None = None,
                  max_download_bytes: int = 256 * 1024 * 1024,
-                 free_space_reserve: int = 512 * 1024 * 1024):
+                 free_space_reserve: int = 512 * 1024 * 1024,
+                 streaming: bool = False):
         self.mount = mount
         self.backend = backend
         self.metadata_ttl = metadata_ttl
@@ -37,6 +38,7 @@ class Hydrator:
         self.max_download_bytes = max_download_bytes
         self.free_space_reserve = free_space_reserve
         self.downloaded_bytes = 0
+        self.streaming = streaming
         self.hydrated: set[str] = set()
         self.kinds: dict[str, bool] = {}
         self.listed_until: dict[str, float] = {}
@@ -120,6 +122,9 @@ class Hydrator:
         with self.lock:
             if not self.dirty:
                 return
+            if self.streaming:
+                self._sync_streaming()
+                return
             local = self._local_entries()
             by_inode = {entry.inode: path for path, entry in local.items()}
 
@@ -177,6 +182,42 @@ class Hydrator:
             if self.marker is not None:
                 self.marker.unlink(missing_ok=True)
 
+    def _sync_streaming(self) -> None:
+        """Sync namespace changes without copying any placeholder file contents."""
+        local = self._local_entries()
+        by_inode = {entry.inode: path for path, entry in local.items()}
+        for directory in (True, False):
+            for source, entry in list(self.remote.items()):
+                if source not in self.remote or entry.directory != directory or source in local:
+                    continue
+                destination = by_inode.get(entry.inode)
+                if destination and destination != source:
+                    self.backend.rename(source, destination)
+                    self._rename_known(source, destination)
+        for path, entry in sorted(local.items(), key=lambda item: item[0].count("/")):
+            if path in self.remote:
+                continue
+            if entry.directory:
+                self.backend.mkdir(path)
+            else:
+                self.backend.create_file(path)
+            self.remote[path] = entry
+            self.created.add(self.mount / path)
+        for path, entry in sorted(list(self.remote.items()), key=lambda item: item[0].count("/"), reverse=True):
+            if path in local:
+                continue
+            if entry.directory:
+                self.backend.rmdir(path)
+            else:
+                self.backend.remove(path)
+            del self.remote[path]
+            self.kinds.pop(path, None)
+            self.hydrated.discard(path)
+        self.touched.clear()
+        self.dirty = False
+        if self.marker is not None:
+            self.marker.unlink(missing_ok=True)
+
     def ensure(self, raw_path: str, action: str) -> None:
         absolute = Path(os.path.normpath(raw_path))
         if not absolute.is_relative_to(self.mount):
@@ -188,7 +229,7 @@ class Hydrator:
             now = time.monotonic()
             if action in ("W", "P", "R"):
                 self.dirty = True
-            if action == "W" and relative:
+            if action == "W" and relative and not self.streaming:
                 self.touched.add(relative)
             if relative and absolute.exists():
                 self.missing_until.pop(relative, None)
@@ -252,6 +293,20 @@ class Hydrator:
                     self._remember(relative, absolute, False)
                 return
             self._mkdir(absolute.parent)
+            if self.streaming:
+                if not absolute.exists():
+                    try:
+                        size = self.backend.stat_size(relative)
+                    except FileNotFoundError:
+                        if action in ("W", "P", "R"):
+                            return
+                        raise
+                    with absolute.open("xb") as output:
+                        output.truncate(size)
+                    self.created.add(absolute)
+                    self._allow_cache_write(absolute)
+                    self._remember(relative, absolute, False)
+                return
             if action in ("O", "W", "R") and relative not in self.hydrated:
                 size = self.backend.stat_size(relative)
                 remaining = self.max_download_bytes - self.downloaded_bytes
@@ -303,6 +358,71 @@ class Hydrator:
                 self._allow_cache_write(absolute)
                 self._remember(relative, absolute, False)
 
+    def read_range(self, raw_path: str, offset: int, size: int) -> bytes:
+        if not self.streaming or offset < 0 or size < 0 or size > 1024 * 1024:
+            raise ValueError("Invalid NAS range request")
+        absolute = Path(os.path.normpath(raw_path))
+        if not absolute.is_relative_to(self.mount):
+            raise ValueError("NAS range path is outside the mount")
+        relative = absolute.relative_to(self.mount).as_posix()
+        return self.backend.read_range(relative, offset, size)
+
+    def write_range(self, raw_path: str, offset: int, data: bytes) -> int:
+        if not self.streaming or offset < 0 or len(data) > 1024 * 1024:
+            raise ValueError("Invalid NAS range write")
+        absolute = Path(os.path.normpath(raw_path))
+        if not absolute.is_relative_to(self.mount):
+            raise ValueError("NAS range path is outside the mount")
+        relative = absolute.relative_to(self.mount).as_posix()
+        with self.lock:
+            written = self.backend.write_range(relative, offset, data)
+            if absolute.exists():
+                end = offset + written
+                if absolute.stat().st_size < end:
+                    os.truncate(absolute, end)
+                if relative not in self.remote:
+                    self._remember(relative, absolute, False)
+                    self.created.add(absolute)
+            return written
+
+    def open_commit(self, raw_path: str, flags: int) -> None:
+        if not self.streaming:
+            raise ValueError("Remote open is only valid in streaming mode")
+        absolute = Path(os.path.normpath(raw_path))
+        if not absolute.is_relative_to(self.mount):
+            raise ValueError("Remote open path is outside the mount")
+        relative = absolute.relative_to(self.mount).as_posix()
+        with self.lock:
+            try:
+                self.backend.stat_size(relative)
+                exists = True
+            except FileNotFoundError:
+                exists = False
+            if flags & os.O_CREAT:
+                if exists and flags & os.O_EXCL:
+                    raise FileExistsError(relative)
+                if not exists:
+                    self.backend.create_file(relative)
+                    exists = True
+            if flags & os.O_TRUNC:
+                if not exists:
+                    raise FileNotFoundError(relative)
+                self.backend.truncate(relative, 0)
+            if absolute.exists() and relative not in self.remote:
+                self._remember(relative, absolute, False)
+                self.created.add(absolute)
+
+    def truncate_range(self, raw_path: str, size: int) -> None:
+        if not self.streaming or size < 0:
+            raise ValueError("Invalid NAS truncate request")
+        absolute = Path(os.path.normpath(raw_path))
+        if not absolute.is_relative_to(self.mount):
+            raise ValueError("NAS truncate path is outside the mount")
+        relative = absolute.relative_to(self.mount).as_posix()
+        with self.lock:
+            self.backend.truncate(relative, size)
+            os.truncate(absolute, size)
+
 
 class HydrationHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
@@ -316,7 +436,7 @@ class HydrationHandler(socketserver.BaseRequestHandler):
                 message = str(error).encode("utf-8", errors="replace")[:4096]
                 self.request.sendall(b"2" + struct.pack("!I", len(message)) + message)
             return
-        if action not in (b"O", b"M", b"W", b"P", b"R") or raw_length is None:
+        if action not in (b"O", b"M", b"W", b"P", b"R", b"D", b"U", b"F", b"T") or raw_length is None:
             return
         length = struct.unpack("!I", raw_length)[0]
         if length > 4096:
@@ -324,6 +444,52 @@ class HydrationHandler(socketserver.BaseRequestHandler):
             return
         raw_path = self._read_exact(length)
         if raw_path is None:
+            return
+        if action == b"F":
+            raw_flags = self._read_exact(4)
+            if raw_flags is None:
+                return
+            try:
+                self.server.hydrator.open_commit(raw_path.decode("utf-8"),
+                                                 struct.unpack("!I", raw_flags)[0])
+                self.request.sendall(b"0")
+            except Exception as error:
+                print(f"nas-mount: remote open failed: {error}", file=sys.stderr)
+                self.request.sendall(b"2")
+            return
+        if action == b"T":
+            raw_size = self._read_exact(8)
+            if raw_size is None:
+                return
+            try:
+                self.server.hydrator.truncate_range(raw_path.decode("utf-8"),
+                                                    struct.unpack("!Q", raw_size)[0])
+                self.request.sendall(b"0")
+            except Exception as error:
+                print(f"nas-mount: remote truncate failed: {error}", file=sys.stderr)
+                self.request.sendall(b"2")
+            return
+        if action in (b"D", b"U"):
+            raw_range = self._read_exact(12)
+            if raw_range is None:
+                return
+            offset, requested = struct.unpack("!QI", raw_range)
+            if requested > 1024 * 1024:
+                self.request.sendall(b"2")
+                return
+            try:
+                if action == b"D":
+                    data = self.server.hydrator.read_range(raw_path.decode("utf-8"), offset, requested)
+                    self.request.sendall(b"0" + struct.pack("!I", len(data)) + data)
+                else:
+                    data = self._read_exact(requested)
+                    if data is None:
+                        return
+                    written = self.server.hydrator.write_range(raw_path.decode("utf-8"), offset, data)
+                    self.request.sendall(b"0" + struct.pack("!I", written))
+            except Exception as error:
+                print(f"nas-mount: remote I/O failed: {error}", file=sys.stderr)
+                self.request.sendall(b"2")
             return
         try:
             self.server.hydrator.ensure(raw_path.decode("utf-8"), action.decode("ascii"))

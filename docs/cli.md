@@ -20,8 +20,8 @@ The password is requested when connecting and is not saved. With no `--share`, `
 | --- | --- |
 | `nas add NAME --host HOST --user USER [--share SHARE] [--port PORT] [--mount-name FOLDER]` | Save or replace a connection. The default SMB port is `445`; the default folder is `~/nas`. |
 | `nas list` | Show saved connections, share selection, and folder paths. |
-| `nas mount [NAME] [--at FOLDER] [--proot PATH]` | Open a Bash session with the live NAS folder. This is the main command. |
-| `nas-mount [NAME] [--at FOLDER] [--proot PATH]` | Alias for `nas mount`. |
+| `nas mount [NAME] [--at FOLDER] [--proot PATH] [--range-io]` | Open a Bash session with the live NAS folder. This is the main command. |
+| `nas-mount [NAME] [--at FOLDER] [--proot PATH] [--range-io]` | Alias for `nas mount`. |
 | `nas set-mount NAME FOLDER` | Save a different folder name under `~` or a full path for future mount sessions. |
 | `nas remove NAME` | Forget a saved connection. Remote files are untouched. |
 | `nas shell [NAME]` | Open the older Bash preview with command wrappers. Use `nas mount` for ordinary programs such as `find` and editors. |
@@ -50,3 +50,5 @@ The server applies your SMB account permissions during sync. File edits with nor
 `--proot PATH` selects a custom patched PRoot binary for development. Normal installs need no `--proot` option.
 
 `TERMUX_NAS_MAX_DOWNLOAD_MB` sets the maximum total number of MiB downloaded into the local backing folder during one mount session. The default is `256`; the bridge also keeps at least 512 MiB free before each download. This limit does not apply to new files or temporary files created by programs in the session.
+
+`--range-io` enables experimental remote byte-range I/O. It keeps sparse local placeholders and sends supported reads and writes directly to SMB, so changing a few bytes of a huge file does not download the whole file. It does not make applications themselves use less memory or transfer less data if they read the entire file. See [Experimental remote range I/O](../README.md#experimental-remote-range-io) for an example and unsupported operations. The download limit above applies to the default mode, not to `--range-io`.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "termux-nas"
-version = "0.2.5"
+version = "0.3.0b1"
 description = "Rootless hybrid Bash and SMB browser for Termux"
 requires-python = ">=3.10"
 dependencies = ["smbprotocol>=1.12,<2", "impacket>=0.13,<0.15"]

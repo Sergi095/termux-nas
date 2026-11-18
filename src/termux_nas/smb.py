@@ -103,6 +103,31 @@ class SMBBackend:
     def read(self, path: str) -> BinaryIO:
         return self._client.open_file(self._unc(path), mode="rb", port=self._port)
 
+    def read_range(self, path: str, offset: int, size: int) -> bytes:
+        with self._client.open_file(self._unc(path), mode="rb", buffering=0, port=self._port) as source:
+            source.seek(offset)
+            return source.read(size)
+
+    def write_range(self, path: str, offset: int, data: bytes) -> int:
+        with self._client.open_file(self._unc(path), mode="r+b", buffering=0, port=self._port) as target:
+            target.seek(offset)
+            written = 0
+            while written < len(data):
+                count = target.write(data[written:])
+                if count is None or count <= 0:
+                    raise OSError("SMB write did not make progress")
+                written += count
+            target.flush()
+            return written
+
+    def create_file(self, path: str) -> None:
+        with self._client.open_file(self._unc(path), mode="xb", buffering=0, port=self._port):
+            pass
+
+    def truncate(self, path: str, size: int) -> None:
+        with self._client.open_file(self._unc(path), mode="r+b", buffering=0, port=self._port) as target:
+            target.truncate(size)
+
     def write(self, path: str) -> BinaryIO:
         return self._client.open_file(self._unc(path), mode="xb", port=self._port)
 
@@ -204,6 +229,28 @@ class SMBAllSharesBackend:
     def read(self, path: str) -> BinaryIO:
         backend, child = self._select(path)
         return backend.read(child)
+
+    def read_range(self, path: str, offset: int, size: int) -> bytes:
+        backend, child = self._select(path)
+        return backend.read_range(child, offset, size)
+
+    def write_range(self, path: str, offset: int, data: bytes) -> int:
+        backend, child = self._select(path)
+        if not child:
+            raise PermissionError("Cannot write to an SMB share root")
+        return backend.write_range(child, offset, data)
+
+    def create_file(self, path: str) -> None:
+        backend, child = self._select(path)
+        if not child:
+            raise PermissionError("Cannot create an SMB share")
+        backend.create_file(child)
+
+    def truncate(self, path: str, size: int) -> None:
+        backend, child = self._select(path)
+        if not child:
+            raise PermissionError("Cannot truncate an SMB share")
+        backend.truncate(child, size)
 
     def write(self, path: str) -> BinaryIO:
         backend, child = self._select(path)

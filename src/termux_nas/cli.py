@@ -23,12 +23,16 @@ def parser() -> argparse.ArgumentParser:
     set_mount.add_argument("folder")
     shell = sub.add_parser("shell", help="Open Bash with local files and a NAS folder")
     shell.add_argument("name", nargs="?")
-    mount = sub.add_parser("mount", help="Open a PRoot shell with a NAS folder that syncs changes to SMB")
+    mount = sub.add_parser("mount", help="Open a PRoot shell with live SMB range I/O")
     mount.add_argument("name", nargs="?")
     mount.add_argument("--at", metavar="FOLDER", help="Use this empty folder as the NAS path for this session")
     mount.add_argument("--proot", help="Path to the patched PRoot binary")
-    mount.add_argument("--range-io", action="store_true",
-                       help="Experimental remote byte-range reads and writes without full-file downloads")
+    io_mode = mount.add_mutually_exclusive_group()
+    io_mode.add_argument("--range-io", dest="range_io", action="store_true",
+                         help="Use remote byte-range reads and writes (default)")
+    io_mode.add_argument("--cached", dest="range_io", action="store_false",
+                         help="Use the older local download and sync mode")
+    mount.set_defaults(range_io=True)
     remove = sub.add_parser("remove", help="Forget a saved NAS connection")
     remove.add_argument("name")
     return p

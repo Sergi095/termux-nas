@@ -1,17 +1,27 @@
-# Architecture and target behavior
+# Architecture
 
-## User goal
+## Process-scoped filesystem view
 
-On an unrooted Android phone, run `nas shell` and keep the full local Termux environment while accessing an SMB share at a configurable path under `~`. Local files and `~/storage/shared` should remain accessible from the same shell.
+`nas mount` starts the Python SMB bridge and a Bash process under patched Termux PRoot. PRoot intercepts filesystem calls from that Bash process and its children. Paths outside the chosen NAS folder continue to use the normal Termux and Android filesystem. The NAS folder is visible only in this traced session; no kernel mount is created.
 
-## Current implementation
+```text
+Termux command → patched PRoot → Unix socket → Python bridge → SMB server
+                       ↓                ↓
+                 path translation   sparse local names and sizes
+```
 
-`nas shell` requests the SMB password and connects using `smbprotocol`. It starts interactive Bash with the user's `~/.bashrc` and a few additional shell functions. A temporary symlink at the configured path points to a private shadow directory so Bash can physically enter it. The shell functions route `cd`, `ls`, `cat`, and simple `cp` operations on that path to an SMB backend through a private Unix socket. Local paths go to Bash and ordinary Termux commands. The symlink and socket are removed at exit.
+The default range mode fetches directory entries and file sizes from SMB. It creates sparse placeholders so ordinary path operations work, then forwards supported reads and writes in byte ranges to the server. The file data passes through memory and is not stored in those placeholders. The bridge synchronizes directory changes and removes its placeholders when the session exits successfully.
 
-The shadow directory does not contain the full NAS. It only holds directory placeholders needed for Bash to change directories. Direct filesystem access by unrelated programs is not provided by the current bridge.
+`nas mount --cached` selects the older mode. It downloads opened files to the backing folder and uploads changes after each interactive command or on exit. This mode has a download limit because a large NAS file could fill phone storage.
 
-## Longer-term investigation: arbitrary CLI programs
+## Components
 
-For unmodified programs to see NAS file contents, a rootless bridge would have to intercept filesystem calls such as `chdir`, `getcwd`, `stat`, `openat`, `getdents64`, `read`, `write`, and `rename`, then translate them to SMB operations. A PRoot-style traced process is a possible research direction. PRoot currently maps paths to local files; it does not implement an SMB backend. This approach would only affect processes launched under the bridge, may be slower, and may not support every program.
+- `src/termux_nas/cli.py` parses commands and chooses the I/O mode.
+- `src/termux_nas/mounted.py` starts the PRoot shell and bridge service.
+- `src/termux_nas/hydrate.py` manages directory entries, sparse placeholders, byte-range requests, and cached-mode sync.
+- `src/termux_nas/smb.py` translates bridge operations to SMB.
+- `experiments/proot/termux-proot-nasfs.patch` adds the PRoot filesystem hook.
 
-Success criteria for a later bridge: `cd`, `ls`, `cat`, `find`, and a text editor work on the NAS path without command-specific Bash functions; local Termux and Android storage paths remain available; file writes handle network interruption safely.
+## Limits
+
+Range mode supports normal read, pread, write, pwrite, seek, truncate, file creation, and common directory operations. Operations without a safe remote equivalent, such as mmap, vector I/O, append mode, links, and permission changes, fail. Concurrent edits from another device are not fully coordinated. Programs that read an entire large file still transfer that file over the network. PRoot and SMB add latency to filesystem calls.

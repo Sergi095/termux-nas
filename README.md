@@ -1,61 +1,49 @@
 # termux-nas
 
-`termux-nas` is a rootless Termux package for browsing an SMB NAS with ordinary commands. It provides `nas` and `nas-mount` commands. Run `nas mount` to open a Bash session where the NAS appears as a folder alongside your normal Termux files, commands, and Android storage. Add `--range-io` for experimental remote reads and writes that do not download entire files.
+`termux-nas` is a rootless Termux package for browsing an SMB NAS with ordinary commands. Run `nas mount` to open a Bash session where the NAS appears as a folder alongside your normal Termux files, commands, and Android storage. Remote byte-range I/O is the default: the bridge does not download entire NAS files into the mount folder.
 
-The folder is a simulated filesystem view provided by PRoot. It exists only for commands started inside the `nas mount` session. Exiting the session disconnects it; an already-running ordinary Termux shell cannot see the live NAS folder. Common file changes are sent to SMB after each interactive shell command and again when the session exits.
+The folder is a simulated filesystem view provided by PRoot. It exists only for commands started inside the `nas mount` session. Exiting the session disconnects it; an already-running ordinary Termux shell cannot see the live NAS folder. The older download and sync mode remains available with `nas mount --cached`.
 
 ## How the simulated mount works
 
-`nas mount` starts a Python bridge and a Bash shell under patched PRoot. PRoot watches filesystem calls made by that shell and its child programs. For paths under the chosen NAS folder, it pauses the call while the bridge prepares a real local backing folder:
+`nas mount` starts a Python bridge and a Bash shell under patched PRoot. PRoot watches filesystem calls made by that shell and its child programs. The bridge creates local directory entries and sparse file placeholders so commands can navigate the NAS without storing file contents there:
 
 ```text
-  Command touches ~/nas (cd, ls, cat, vi, cp)
-                    │
-                    ▼
-          Patched PRoot path hook
-          pauses the filesystem call
-                    │ private Unix socket
-                    ▼
-             Python NAS bridge ◀──── SMB ────▶ NAS server
-                    │
-                    │ creates directories or downloads an opened file
-                    ▼
-          Local backing folder at ~/nas
-                    │
-                    ▼
-          Original filesystem call continues
-                    │
-                    ▼
-          Android handles it like a normal local path
+  `cd`, `ls`, `find` ──▶ PRoot ──▶ Python bridge ──SMB──▶ NAS names and sizes
+                                   │
+                                   └──▶ sparse placeholders at ~/nas
+                                        (no NAS file contents stored)
 
-  After an edit: local file ──▶ bridge ── SMB ──▶ NAS server
-                 (at the next prompt or when the session exits)
+  `cat`, `read`    ──▶ PRoot ──▶ Python bridge ──SMB──▶ NAS file bytes
+                         ◀──────── requested bytes in memory ◀────────┘
+                         └──▶ terminal or command output
+
+  `write`, `pwrite` ──▶ PRoot ──▶ Python bridge ──SMB──▶ NAS file bytes
+                         (changed byte ranges go to the server)
 ```
 
-For example, `cd ~/nas/Shared` works because the bridge creates the corresponding local directory before Android handles `chdir()`. `ls` sees names fetched from the NAS. Opening a file downloads its contents when needed; listing a directory does not download every file in it.
+For example, `cd ~/nas/Shared` works because the bridge creates the corresponding local directory before Android handles `chdir()`. `ls` sees names fetched from the NAS. A read fetches the bytes the command requests into memory; it does not fill the sparse placeholder with those bytes. `cat` still transfers an entire file over the network because it reads the entire file. `cat file > ~/local-copy` saves a copy because the output path is on the phone.
 
-Writes take the return trip: `vi` or `cp` changes the local backing file, then the bridge uploads that change over SMB when the interactive prompt returns or the session exits. Other Termux paths are available in the same shell because PRoot runs with the existing Android filesystem as its root. No kernel mount or root access is involved, so a shell outside this PRoot session does not get the live NAS view.
+Supported file writes go to SMB as the program makes them. Directory changes are synchronized with the server, and the bridge removes its placeholders when the session exits successfully. Programs may still create their own temporary files, and files you save elsewhere on the phone remain there. Other Termux paths are available in the same shell because PRoot runs with the existing Android filesystem as its root. No kernel mount or root access is involved, so a shell outside this PRoot session does not get the live NAS view.
 
 ## Install in Termux
 
-Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://play.google.com/store/apps/details?id=com.termux). This repository is private, so your GitHub account must have access to it. Open Termux and run:
+Install Termux from [F-Droid](https://f-droid.org/packages/com.termux/), [GitHub Releases](https://github.com/termux/termux-app/releases), or [Google Play](https://play.google.com/store/apps/details?id=com.termux). Open Termux and run:
 
 ```sh
-pkg install -y git gh
-gh auth login
-gh auth setup-git
+pkg install -y git
 mkdir -p ~/repos
-gh repo clone Sergi095/termux-nas ~/repos/termux-nas
+git clone https://github.com/Sergi095/termux-nas.git ~/repos/termux-nas
 cd ~/repos/termux-nas
 bash install.sh
 nas --help
 ```
 
-`gh auth login` signs into GitHub in Termux; `gh auth setup-git` lets later `git pull` commands use that login. The installer adds `nas` and `nas-mount` to Termux, installs Python dependencies, builds the patched PRoot binary, and checks that PRoot can start a Termux command. The first install can take a few minutes; later runs reuse the PRoot build. You do not need root, a separate PRoot checkout, or an Android add-on APK.
+The repository is public; a GitHub account is not needed to clone it. The installer adds `nas` and `nas-mount` to Termux, installs Python dependencies, builds the patched PRoot binary, and checks that PRoot can start a Termux command. The first install can take a few minutes; later runs reuse the PRoot build. You do not need root, a separate PRoot checkout, or an Android add-on APK.
 
 Google Play Termux uses its app-provided executable PRoot loader when present. F-Droid and GitHub builds use the loader bundled in the patched PRoot. Termux APKs from these sources have different signatures; see [Termux's installation notes](https://github.com/termux/termux-app#installation) before switching the Termux app itself between sources.
 
-If you already have the repository, make sure GitHub is authenticated in Termux (`gh auth login` and `gh auth setup-git`), then update the installed package with:
+If you already have the repository, update the installed package with:
 
 ```sh
 cd ~/repos/termux-nas
@@ -125,7 +113,7 @@ cd ~/other-folder
 
 For one session without changing the saved path, use `nas mount home --at ~/other-folder`. Paths may be relative, absolute, or start with `~`. If the folder does not exist, its parent must already exist; `nas mount` creates the folder and removes it on exit. If you created an empty folder first, the folder remains after exit. A folder containing files is refused so its contents are never replaced. `nas-mount home --at ~/other-folder` is an alias for `nas mount home --at ~/other-folder`.
 
-`nas mount` checks that the local folder and each discovered share folder accept writes before opening the shell. If it reports that a folder cannot be written, choose an empty folder under your Termux home and retry with `--at` or `nas set-mount`.
+`nas mount` checks that its local folder can be accessed before opening the shell. If it reports a folder error, choose an empty folder under your Termux home and retry with `--at` or `nas set-mount`. The NAS server decides whether your account can write to a share.
 
 ## Use the NAS folder
 
@@ -148,26 +136,20 @@ ls
 exit
 ```
 
-Use your chosen folder instead of `~/nas` if you changed it. If you added a connection with `--share Shared`, start at `~/nas`; otherwise enter the share folder as shown. Copying files in either direction, editing files, `touch`, `mkdir`, `mv` within one share, and `rm` are supported. Your other Termux and Android storage paths remain available in the session.
+Use your chosen folder instead of `~/nas` if you changed it. If you added a connection with `--share Shared`, start at `~/nas`; otherwise enter the share folder as shown. Copying files in either direction, editing files, `mkdir`, `mv` within one share, and `rm` are supported. Your other Termux and Android storage paths remain available in the session.
 
-Changes become visible on the NAS after the command finishes and the Bash prompt returns. Large uploads can make the next prompt wait. For noninteractive commands, they sync before `nas mount` exits. If SMB rejects a change or the connection fails, `nas` prints the error and leaves the local files in the chosen folder for recovery. Review those files before running another mount there.
+In the default range mode, supported file writes are sent to SMB as they happen. Directory changes such as rename and delete are synchronized as commands make them. If SMB rejects an operation, the command reports an error. Check both the phone folder and the NAS after a failed operation or interrupted session before retrying.
 
-This is limited write-through emulation. A command may finish locally before an SMB error is reported at the prompt. Symbolic links, hard links, ownership and permission changes, and renaming across different shares are unsupported. The local folder does not mirror SMB access control checks before each write; the server applies your account's permissions when the change syncs. Changed remote files are checked before overwriting, but concurrent renames and deletes are not fully protected.
+This is limited filesystem emulation. Symbolic links, hard links, ownership and permission changes, append mode (`>>`), and renaming across different shares are unsupported. Programs requiring `mmap`, vector I/O, `sendfile`, `splice`, or `fallocate` on a NAS file will fail rather than read placeholder bytes. The server applies your account's SMB permissions. Concurrent edits from other devices are not fully protected.
 
-Directory listings are reused for two seconds to reduce SMB requests. Opened files are cached until you exit, so a file changed on the NAS by another device may need a new `nas mount` session before you see the change. PRoot adds overhead to filesystem operations, so this shell is slower than ordinary Termux.
+Directory listings are reused for two seconds to reduce SMB requests. File names and sizes can be stale within a session if another device changes the NAS; start a new mount session to refresh them. PRoot and SMB add latency to file operations, so this shell is slower than ordinary Termux.
 
-### Large files
+### Large files and local storage
 
-In the default mode, listing a file does not download its contents, but opening an existing NAS file downloads the **entire file** into the local backing folder. To protect phone storage, the bridge limits NAS downloads to **256 MiB total per session** and refuses a download that would leave less than **512 MiB free** on the backing filesystem. A 500 GB file can be listed, but opening it fails before its contents are downloaded. You can explicitly raise the session limit with `TERMUX_NAS_MAX_DOWNLOAD_MB=512 nas mount home` if your device has room.
-
-The download limit does not cap files that programs create locally, including editor swap files. Saving an existing file still uploads the **entire file** again. An interrupted upload can leave the remote file incomplete because the current uploader truncates it before copying the new contents. Do not use this version to edit files that are too large to fit locally or that you cannot safely restore.
-
-### Experimental remote range I/O
-
-To read or change part of a huge file without downloading it, start the mount with `--range-io`:
+The default `nas mount home` uses remote byte-range I/O. To read or change part of a huge file without downloading it into the mount folder:
 
 ```sh
-nas mount home --range-io
+nas mount home
 cd ~/nas/Shared             # Or cd ~/nas if you selected one share
 python - <<'PY'
 import os
@@ -181,7 +163,7 @@ PY
 The range mode keeps a **sparse placeholder** with the file's name and size. It holds no copy of the file's contents. PRoot routes each supported file read or write through the bridge to SMB:
 
 ```text
-  Program in `nas mount --range-io`       Local phone          NAS server
+  Program in `nas mount`                  Local phone          NAS server
   ──────────────────────────────────────────────────────────────────────
   stat("huge.bin")                      sparse name + size  ◀─ metadata
   pread(fd, 4, 500 GB - 4)             no data stored      ◀─ 4 bytes
@@ -190,7 +172,13 @@ The range mode keeps a **sparse placeholder** with the file's name and size. It 
 
 The same session still shows your normal Termux home and Android storage. A 500 GB file was tested on Android 17 with four-byte reads and writes near its end; the local placeholder occupied 4 KiB. The actual transfer depends on what the program does: reading or copying the entire file still transfers 500 GB, and a program that loads it all into memory may run out of memory. `vi` can edit ordinary files in this mode, but it is not a practical random-access editor for a 500 GB file.
 
-Range mode currently handles ordinary `read`, `pread`, `write`, `pwrite`, seek, truncate, file creation, and common directory changes. It deliberately rejects `mmap`, vector I/O, `sendfile`, `splice`, `fallocate`, and permission or ownership changes on NAS files because those calls do not yet have remote equivalents. Programs that require those calls will fail rather than read placeholder zeros or change only local metadata. Writes are sent to SMB as the program makes them; the server applies your account's permissions. The view is still limited to the PRoot session, and PRoot and SMB add latency to file operations. Treat `--range-io` as experimental and keep backups of important files.
+Range mode handles ordinary `read`, `pread`, `write`, `pwrite`, seek, truncate, file creation, and common directory changes. It deliberately rejects operations without remote equivalents rather than reading placeholder zeros or changing only local metadata. It is still experimental; keep backups of important files. The `--range-io` flag remains accepted but is no longer needed.
+
+### Older cached mode
+
+Run `nas mount home --cached` to use the previous download and sync behavior. In that mode, opening an existing NAS file downloads its **entire contents** into the local backing folder. The bridge limits downloads to **256 MiB total per session** and refuses a download that would leave less than **512 MiB free**. You can raise the session limit with `TERMUX_NAS_MAX_DOWNLOAD_MB=512 nas mount home --cached` if your device has room.
+
+Cached mode uploads edited files after each interactive command or when the session exits. An interrupted upload can leave the remote file incomplete because the uploader truncates it before copying the new contents. This mode does not support editing a 500 GB file without storing it locally. Its download limit does not cap files or editor temporary files created locally by programs.
 
 ## Remove the package
 
@@ -203,7 +191,7 @@ The saved connections remain in `~/.config/termux-nas/connections.json` unless y
 
 ## Development
 
-The Python package uses the [smbprotocol `smbclient` API](https://github.com/jborean93/smbprotocol). The PRoot hook asks a private Unix socket service to populate local cache files before ordinary filesystem operations continue. Manual PRoot build details are in [experiments/proot/README.md](experiments/proot/README.md).
+The Python package uses the [smbprotocol `smbclient` API](https://github.com/jborean93/smbprotocol). The PRoot hook talks to a private Unix socket service for NAS metadata and byte-range I/O. Manual PRoot build details are in [experiments/proot/README.md](experiments/proot/README.md).
 
 ```sh
 PYTHONPATH=src python -m unittest discover -s tests -v

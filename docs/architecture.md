@@ -24,4 +24,4 @@ The default range mode fetches directory entries and file sizes from SMB. It cre
 
 ## Limits
 
-Range mode supports normal read, pread, write, pwrite, seek, truncate, file creation, and common directory operations. Operations without a safe remote equivalent, such as mmap, vector I/O, append mode, links, and permission changes, fail. Concurrent edits from another device are not fully coordinated. Programs that read an entire large file still transfer that file over the network. PRoot and SMB add latency to filesystem calls.
+Range mode supports normal read, pread, write, pwrite, append, seek, truncate, file creation, and common directory operations. Append checks the remote size before writing and is not atomic against another client appending at the same time. Operations without a safe remote equivalent, such as mmap, vector I/O, links, and permission changes, fail. Concurrent edits from another device are not fully coordinated. Programs that read an entire large file still transfer that file over the network. PRoot and SMB add latency to filesystem calls.

@@ -43,7 +43,7 @@ With all-shares mode, create files inside `FOLDER/SHARE`, not at the server's sh
 
 ## What `mount` does
 
-Inside the `nas mount` Bash session, normal commands such as `cd`, `ls`, `find`, `cat`, `cp`, and editors see the NAS folder alongside Termux home, `$PREFIX`, and Android storage. Supported file reads and writes go to SMB in byte ranges; NAS file contents are not stored in the private sparse placeholders. The ordinary NAS path stays empty outside the session. Exiting closes this process-scoped view and removes the placeholders after a successful sync. If the bridge prints a recovery folder after an error, inspect it before deleting it.
+Inside the `nas mount` Bash session, normal commands such as `cd`, `ls`, `find`, `cat`, `cp`, `echo text >> file`, and editors see the NAS folder alongside Termux home, `$PREFIX`, and Android storage. Supported file reads and writes go to SMB in byte ranges; NAS file contents are not stored in the private sparse placeholders. The ordinary NAS path stays empty outside the session. Exiting closes this process-scoped view and removes the temporary placeholders even if a sync fails. Append checks the remote size before each write, so simultaneous appenders can conflict.
 
 The server applies your SMB account permissions. File edits with normal `vi`, shell redirection, copy, `mkdir`, rename within a share, and delete are supported. Append mode, symbolic links, ownership or permission changes, and rename across shares are unsupported. See [Use the NAS folder](../README.md#use-the-nas-folder) for examples and limitations.
 

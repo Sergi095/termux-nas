@@ -390,6 +390,27 @@ class Hydrator:
                     self.created.add(absolute)
             return written
 
+    def append_range(self, raw_path: str, data: bytes) -> tuple[int, int]:
+        if not self.streaming or len(data) > 1024 * 1024:
+            raise ValueError("Invalid NAS append request")
+        absolute = Path(os.path.normpath(raw_path))
+        if not absolute.is_relative_to(self.mount):
+            raise ValueError("NAS append path is outside the mount")
+        relative = absolute.relative_to(self.mount).as_posix()
+        with self.lock:
+            offset = self.backend.stat_size(relative)
+            if not data:
+                return 0, offset
+            written = self.backend.write_range(relative, offset, data)
+            end = offset + written
+            if absolute.exists():
+                if absolute.stat().st_size < end:
+                    os.truncate(absolute, end)
+                if relative not in self.remote:
+                    self._remember(relative, absolute, False)
+                    self.created.add(absolute)
+            return written, end
+
     def open_commit(self, raw_path: str, flags: int) -> None:
         if not self.streaming:
             raise ValueError("Remote open is only valid in streaming mode")
@@ -441,7 +462,7 @@ class HydrationHandler(socketserver.BaseRequestHandler):
                 message = str(error).encode("utf-8", errors="replace")[:4096]
                 self.request.sendall(b"2" + struct.pack("!I", len(message)) + message)
             return
-        if action not in (b"O", b"M", b"W", b"P", b"R", b"D", b"U", b"F", b"T") or raw_length is None:
+        if action not in (b"O", b"M", b"W", b"P", b"R", b"D", b"U", b"A", b"F", b"T") or raw_length is None:
             return
         length = struct.unpack("!I", raw_length)[0]
         if length > 4096:
@@ -474,7 +495,7 @@ class HydrationHandler(socketserver.BaseRequestHandler):
                 self.server.report_error("remote truncate", error)
                 self.request.sendall(b"2")
             return
-        if action in (b"D", b"U"):
+        if action in (b"D", b"U", b"A"):
             raw_range = self._read_exact(12)
             if raw_range is None:
                 return
@@ -486,12 +507,18 @@ class HydrationHandler(socketserver.BaseRequestHandler):
                 if action == b"D":
                     data = self.server.hydrator.read_range(raw_path.decode("utf-8"), offset, requested)
                     self.request.sendall(b"0" + struct.pack("!I", len(data)) + data)
-                else:
+                elif action == b"U":
                     data = self._read_exact(requested)
                     if data is None:
                         return
                     written = self.server.hydrator.write_range(raw_path.decode("utf-8"), offset, data)
                     self.request.sendall(b"0" + struct.pack("!I", written))
+                else:
+                    data = self._read_exact(requested)
+                    if data is None:
+                        return
+                    written, end = self.server.hydrator.append_range(raw_path.decode("utf-8"), data)
+                    self.request.sendall(b"0" + struct.pack("!IQ", written, end))
             except Exception as error:
                 self.server.report_error("remote I/O", error)
                 self.request.sendall(b"2")

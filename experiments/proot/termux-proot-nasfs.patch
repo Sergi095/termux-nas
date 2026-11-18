@@ -36,10 +36,10 @@ index 7df1fa0..5188d5d 100644
  #endif /* EXTENSION_H */
 diff --git a/src/extension/nasfs/nasfs.c b/src/extension/nasfs/nasfs.c
 new file mode 100644
-index 0000000..8ff2ac4
+index 0000000..584355b
 --- /dev/null
 +++ b/src/extension/nasfs/nasfs.c
-@@ -0,0 +1,599 @@
+@@ -0,0 +1,630 @@
 +/* NAS filesystem hydration and command-boundary write-through for PRoot. */
 +#include <arpa/inet.h>
 +#include <errno.h>
@@ -152,6 +152,25 @@ index 0000000..8ff2ac4
 +    return -1;
 +}
 +
++static int fd_append_mode(Tracee *tracee, int fd)
++{
++    char proc_path[64];
++    char line[128];
++    unsigned int flags;
++    FILE *input;
++    snprintf(proc_path, sizeof(proc_path), "/proc/%ld/fdinfo/%d", (long) tracee->pid, fd);
++    input = fopen(proc_path, "r");
++    if (input == NULL) return -1;
++    while (fgets(line, sizeof(line), input) != NULL) {
++        if (sscanf(line, "flags:\t%o", &flags) == 1) {
++            fclose(input);
++            return (flags & O_APPEND) != 0;
++        }
++    }
++    fclose(input);
++    return -1;
++}
++
 +static int read_range(const char *path, uint64_t offset, uint32_t requested,
 +                      unsigned char *buffer, uint32_t *received)
 +{
@@ -193,7 +212,8 @@ index 0000000..8ff2ac4
 +}
 +
 +static int write_range(const char *path, uint64_t offset, const unsigned char *data,
-+                       uint32_t requested, uint32_t *written)
++                       uint32_t requested, uint32_t *written, int append,
++                       uint64_t *end_position)
 +{
 +    const char *socket_path = getenv("PROOT_NAS_SOCKET");
 +    struct sockaddr_un address;
@@ -210,7 +230,7 @@ index 0000000..8ff2ac4
 +    address.sun_family = AF_UNIX;
 +    strcpy(address.sun_path, socket_path);
 +    if (connect(fd, (struct sockaddr *) &address, sizeof(address)) < 0) goto failed;
-+    header[0] = 'U';
++    header[0] = append ? 'A' : 'U';
 +    network = htonl(path_length);
 +    memcpy(header + 1, &network, 4);
 +    for (index = 0; index < 8; index++)
@@ -223,6 +243,13 @@ index 0000000..8ff2ac4
 +        full_read(fd, header, 1) < 0 || header[0] != '0' ||
 +        full_read(fd, &network, 4) < 0) goto failed;
 +    *written = ntohl(network);
++    if (append) {
++        unsigned char bytes[8];
++        if (full_read(fd, bytes, sizeof(bytes)) < 0) goto failed;
++        *end_position = 0;
++        for (index = 0; index < 8; index++)
++            *end_position = (*end_position << 8) | bytes[index];
++    }
 +    close(fd);
 +    return *written <= requested ? 0 : -EIO;
 +failed:
@@ -493,19 +520,25 @@ index 0000000..8ff2ac4
 +            char fd_path[PATH_MAX];
 +            unsigned char *data;
 +            uint64_t offset;
++            uint64_t end_position = 0;
 +            uint32_t written = 0;
 +            int status;
++            int append;
 +            NasState *state;
 +            if (!remote_fd_path(tracee, fd, fd_path)) return 0;
 +            if (count > NAS_RANGE_CHUNK) count = NAS_RANGE_CHUNK;
++            append = fd_append_mode(tracee, fd);
++            if (append < 0) return -EIO;
 +            if (call == PR_pwrite64)
 +                offset = peek_reg(tracee, ORIGINAL, SYSARG_4);
-+            else if (fd_position(tracee, fd, &offset) < 0) return -EIO;
++            else if (!append && fd_position(tracee, fd, &offset) < 0) return -EIO;
++            else if (append) offset = 0;
 +            data = malloc(count ? count : 1);
 +            if (data == NULL) return -ENOMEM;
 +            status = read_data(tracee, data, peek_reg(tracee, ORIGINAL, SYSARG_2), count);
 +            if (status == 0)
-+                status = write_range(fd_path, offset, data, count, &written);
++                status = write_range(fd_path, offset, data, count, &written, append,
++                                     &end_position);
 +            free(data);
 +            if (status < 0) return status;
 +            if (call == PR_pwrite64) {
@@ -517,8 +550,8 @@ index 0000000..8ff2ac4
 +                state->pending_write_active = 1;
 +                set_sysnum(tracee, PR_lseek);
 +                poke_reg(tracee, SYSARG_1, fd);
-+                poke_reg(tracee, SYSARG_2, written);
-+                poke_reg(tracee, SYSARG_3, SEEK_CUR);
++                poke_reg(tracee, SYSARG_2, append ? end_position : written);
++                poke_reg(tracee, SYSARG_3, append ? SEEK_SET : SEEK_CUR);
 +                tracee->restart_how = PTRACE_SYSCALL;
 +            }
 +            return 0;
@@ -603,8 +636,6 @@ index 0000000..8ff2ac4
 +        (path[strlen(mount)] != '/' && path[strlen(mount)] != '\0'))
 +        return 0;
 +    sysnum = get_sysnum(TRACEE(extension), ORIGINAL);
-+    if (stream_enabled() && (get_open_flags(TRACEE(extension), sysnum) & O_APPEND))
-+        return -EOPNOTSUPP;
 +    if (stream_enabled() && (sysnum == PR_utime || sysnum == PR_utimes ||
 +        sysnum == PR_utimensat || sysnum == PR_futimesat)) return -EOPNOTSUPP;
 +    if (sysnum == PR_setxattr || sysnum == PR_lsetxattr ||

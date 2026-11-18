@@ -25,7 +25,7 @@ The folder is a simulated filesystem view provided by PRoot. It exists only for 
 
 For example, `cd ~/nas/Shared` works because the bridge creates the corresponding local directory before Android handles `chdir()`. `ls` sees names fetched from the NAS. A read fetches the bytes the command requests into memory; it does not fill the sparse placeholder with those bytes. `cat` still transfers an entire file over the network because it reads the entire file. `cat file > ~/local-copy` saves a copy because the output path is on the phone.
 
-Supported file writes go to SMB as the program makes them. Directory changes are synchronized with the server, and the bridge removes its private placeholders when the session exits successfully. A newly created NAS file remains on the server, while its private placeholder disappears on exit. Programs may still create their own temporary files, and files you save elsewhere on the phone remain there. If a sync fails, the bridge prints a recovery folder path instead of deleting files it cannot account for. Other Termux paths are available in the same shell because PRoot runs with the existing Android filesystem as its root. No kernel mount or root access is involved, so a shell outside this PRoot session does not get the live NAS view.
+Supported file writes go to SMB as the program makes them. Directory changes are synchronized with the server. A newly created NAS file remains on the server, while its private placeholder disappears on exit. If a sync fails in range mode, the bridge reports the error and discards its temporary backing directory; it does not keep a local recovery copy. Programs may still create their own temporary files outside the NAS folder, and files you save elsewhere on the phone remain there. Other Termux paths are available in the same shell because PRoot runs with the existing Android filesystem as its root. No kernel mount or root access is involved, so a shell outside this PRoot session does not get the live NAS view.
 
 ## Install in Termux
 
@@ -152,9 +152,9 @@ exit
 
 Use your chosen folder instead of `~/nas` if you changed it. If you added a connection with `--share Shared`, start at `~/nas`; otherwise enter the share folder as shown. Copying files in either direction, editing files, `mkdir`, `mv` within one share, and `rm` are supported. Your other Termux and Android storage paths remain available in the session.
 
-In the default range mode, supported file writes are sent to SMB as they happen. Directory changes such as rename and delete are synchronized as commands make them. If SMB rejects an operation, the command reports an error. Check the NAS and any recovery folder printed by the bridge after a failed operation or interrupted session before retrying.
+In the default range mode, supported file writes are sent to SMB as they happen. Directory changes such as rename and delete are synchronized as commands make them. If SMB rejects an operation, the command reports an error. Check the NAS after a failed operation or interrupted session before retrying; some earlier writes may already have reached it.
 
-This is limited filesystem emulation. Symbolic links, hard links, ownership and permission changes, append mode (`>>`), and renaming across different shares are unsupported. Programs requiring `mmap`, vector I/O, `sendfile`, `splice`, or `fallocate` on a NAS file will fail rather than read placeholder bytes. The server applies your account's SMB permissions. Concurrent edits from other devices are not fully protected.
+This is limited filesystem emulation. Symbolic links, hard links, ownership and permission changes, and renaming across different shares are unsupported. Programs requiring `mmap`, vector I/O, `sendfile`, `splice`, or `fallocate` on a NAS file will fail rather than read placeholder bytes. The server applies your account's SMB permissions. Append (`>>`) checks the current remote size before each write; concurrent appenders are not protected from overwriting each other.
 
 Directory listings are reused for two seconds to reduce SMB requests. File names and sizes can be stale within a session if another device changes the NAS; start a new mount session to refresh them. PRoot and SMB add latency to file operations, so this shell is slower than ordinary Termux.
 
@@ -186,7 +186,7 @@ The range mode keeps a **sparse placeholder** with the file's name and size in a
 
 The same session still shows your normal Termux home and Android storage. A 500 GB file was tested on Android 17 with four-byte reads and writes near its end; the private local placeholder occupied 4 KiB. The actual transfer depends on what the program does: reading or copying the entire file still transfers 500 GB, and a program that loads it all into memory may run out of memory. `vi` can edit ordinary files in this mode, but it is not a practical random-access editor for a 500 GB file. Editors may also make their own swap or backup copies on the phone; the bridge cannot prevent that.
 
-Range mode handles ordinary `read`, `pread`, `write`, `pwrite`, seek, truncate, file creation, and common directory changes. It deliberately rejects operations without remote equivalents rather than reading placeholder zeros or changing only local metadata. It is still experimental; keep backups of important files. The `--range-io` flag remains accepted but is no longer needed.
+Range mode handles ordinary `read`, `pread`, `write`, `pwrite`, append, seek, truncate, file creation, and common directory changes. It deliberately rejects operations without remote equivalents rather than reading placeholder zeros or changing only local metadata. It is still experimental; keep backups of important files on the NAS or another device. The `--range-io` flag remains accepted but is no longer needed.
 
 ### Older cached mode
 

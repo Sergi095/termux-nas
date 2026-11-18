@@ -1,4 +1,5 @@
 import io
+import contextlib
 import os
 import shlex
 import shutil
@@ -35,6 +36,93 @@ class FakeBackend:
 
 
 class MountedShellTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"),
+                         "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
+    def test_streaming_sync_failure_discards_private_backing(self):
+        class DeniedBackend:
+            def is_dir(self, path):
+                if not path:
+                    return True
+                raise FileNotFoundError(path)
+
+            def entries(self, path):
+                return []
+
+            def mkdir(self, path):
+                raise PermissionError("SMB account cannot create a directory")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            errors = io.StringIO()
+            with (patch.dict(os.environ, {"HOME": temporary}),
+                  patch("tempfile.tempdir", temporary),
+                  contextlib.redirect_stderr(errors)):
+                status = run_mounted_shell(
+                    DeniedBackend(), "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                    [shutil.which("bash"), "-c", 'mkdir "$HOME/nas/newdir"'],
+                    streaming=True,
+                )
+            self.assertNotEqual(status, 0)
+            self.assertIn("sync failed", errors.getvalue())
+            self.assertEqual(list(Path(temporary).iterdir()), [])
+
+    @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"),
+                         "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
+    def test_streaming_append_writes_remote_end_without_local_copy(self):
+        class AppendBackend:
+            def __init__(self):
+                self.files = {"existing.txt": bytearray(b"old\n")}
+                self.writes = []
+
+            def is_dir(self, path):
+                if not path:
+                    return True
+                if path in self.files:
+                    return False
+                raise FileNotFoundError(path)
+
+            def entries(self, path):
+                return [{"name": name, "mode": "-rw-r--r--", "size": len(data)}
+                        for name, data in self.files.items()]
+
+            def stat_size(self, path):
+                if path not in self.files:
+                    raise FileNotFoundError(path)
+                return len(self.files[path])
+
+            def read_range(self, path, offset, count):
+                return bytes(self.files[path][offset:offset + count])
+
+            def write_range(self, path, offset, data):
+                self.writes.append((path, offset, data))
+                content = self.files[path]
+                content[offset:offset + len(data)] = data
+                return len(data)
+
+            def create_file(self, path):
+                self.files[path] = bytearray()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = AppendBackend()
+            output = Path(temporary) / "output.txt"
+            script = ('cd "$HOME/nas" && '
+                      'echo heeey >> existing.txt && '
+                      'echo first >> new.txt && '
+                      'echo second >> new.txt && '
+                      f'cat existing.txt new.txt > {shlex.quote(str(output))}')
+            with patch.dict(os.environ, {"HOME": temporary}):
+                status = run_mounted_shell(
+                    backend, "nas", os.environ["TERMUX_NAS_TEST_PROOT"],
+                    [shutil.which("bash"), "-c", script], streaming=True,
+                )
+            self.assertEqual(status, 0)
+            self.assertEqual(output.read_bytes(), b"old\nheeey\nfirst\nsecond\n")
+            self.assertEqual(backend.writes, [
+                ("existing.txt", 4, b"heeey\n"),
+                ("new.txt", 0, b"first\n"),
+                ("new.txt", 6, b"second\n"),
+            ])
+            self.assertFalse((Path(temporary) / "nas").exists())
+
     @unittest.skipUnless(os.environ.get("TERMUX_NAS_TEST_PROOT"),
                          "set TERMUX_NAS_TEST_PROOT to run the PRoot integration test")
     def test_restricted_dfs_child_does_not_break_root_listing(self):
@@ -91,6 +179,7 @@ class MountedShellTests(unittest.TestCase):
                 super().__init__()
                 self.ranges = []
                 self.suffix = b"tail"
+                self.logical_size = size
 
             def is_dir(self, path):
                 if path == "":
@@ -100,11 +189,11 @@ class MountedShellTests(unittest.TestCase):
                 raise FileNotFoundError(path)
 
             def entries(self, path):
-                return [{"name": "huge.bin", "mode": "-rw-r--r--", "size": size}]
+                return [{"name": "huge.bin", "mode": "-rw-r--r--", "size": self.logical_size}]
 
             def stat_size(self, path):
                 if path == "huge.bin":
-                    return size
+                    return self.logical_size
                 raise FileNotFoundError(path)
 
             def read(self, path):
@@ -115,9 +204,12 @@ class MountedShellTests(unittest.TestCase):
                 return self.suffix if offset == size - 4 else b""
 
             def write_range(self, path, offset, data):
-                if path != "huge.bin" or offset != size - 4:
+                if path == "huge.bin" and offset == size - 4:
+                    self.suffix = data
+                elif path == "huge.bin" and offset == self.logical_size and data == b"!":
+                    self.logical_size += len(data)
+                else:
                     raise AssertionError("Unexpected remote write")
-                self.suffix = data
                 return len(data)
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -126,7 +218,9 @@ class MountedShellTests(unittest.TestCase):
                       f'f.seek({size - 4}); print(f.read(4).decode()); '
                       f'os.pwrite(f.fileno(), b"edit", {size - 4}); '
                       f'print(os.pread(f.fileno(), 4, {size - 4}).decode()); '
-                      'print(os.fstat(f.fileno()).st_blocks)')
+                      'print(os.fstat(f.fileno()).st_blocks); f.close(); '
+                      'a=open(os.path.expanduser("~/nas/huge.bin"), "ab", buffering=0); '
+                      'a.write(b"!"); print(a.tell())')
             output = Path(temporary) / "range-output.txt"
             with patch.dict(os.environ, {"HOME": temporary}):
                 status = run_mounted_shell(
@@ -138,7 +232,9 @@ class MountedShellTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertEqual(output.read_text().splitlines()[:2], ["tail", "edit"])
             self.assertLess(int(output.read_text().splitlines()[2]) * 512, 1024 * 1024)
+            self.assertEqual(int(output.read_text().splitlines()[3]), size + 1)
             self.assertEqual(backend.suffix, b"edit")
+            self.assertEqual(backend.logical_size, size + 1)
             self.assertEqual(backend.ranges, [("huge.bin", size - 4, 4),
                                               ("huge.bin", size - 4, 4)])
 

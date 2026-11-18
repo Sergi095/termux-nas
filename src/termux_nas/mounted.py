@@ -158,7 +158,7 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
                     except Exception as error:
                         preserve_cache = True
                         if streaming:
-                            print(f"nas: sync failed: {error}; preserving private recovery files", file=sys.stderr)
+                            print(f"nas: sync failed: {error}; temporary NAS view discarded", file=sys.stderr)
                         else:
                             print(f"nas: sync failed: {error}; unsynced files remain at {mount}", file=sys.stderr)
                         return shell_status or 1
@@ -169,10 +169,6 @@ def run_mounted_shell(backend, mount_name: str, proot_path: str | None = None,
         finally:
             if not preserve_cache and not hydrator.dirty and backing.is_dir():
                 hydrator.cleanup()
-            if streaming and backing.is_dir() and (preserve_cache or any(backing.iterdir())):
-                recovery = Path(tempfile.mkdtemp(prefix="termux-nas-recovery-")) / "backing"
-                shutil.move(str(backing), str(recovery))
-                print(f"nas: local recovery files remain at {recovery}", file=sys.stderr)
             if created_mount and mount.is_dir() and not mount.is_symlink():
                 try:
                     mount.rmdir()
